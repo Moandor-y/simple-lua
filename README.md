@@ -1,4 +1,4 @@
-# slua
+# simple-lua
 
 A compiler which compiles (a subset of) lua to machine code.
 
