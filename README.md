@@ -1,4 +1,4 @@
-# slua
+# simple-lua
 
 A compiler which compiles (a subset of) lua to machine code.
 
@@ -37,7 +37,7 @@ A compiler which compiles (a subset of) lua to machine code.
 ### Steps
 
 ```
-git clone --recursive https://github.com/Moandor-y/slua.git
+git clone --recursive https://github.com/Moandor-y/simple-lua.git
 cd slua/
 mkdir build
 cd build/
