@@ -5,6 +5,7 @@
 #include <array>
 #include <stdexcept>
 #include <type_traits>
+#include <utility>
 #include <variant>
 
 #include "util.hpp"
@@ -57,6 +58,8 @@ using node::ExprStat;
 using node::Field;
 using node::ForStat;
 using node::FuncCall;
+using node::FuncName;
+using node::FuncStat;
 using node::IfStat;
 using node::Index;
 using node::LiteralFloat;
@@ -178,7 +181,7 @@ StatList& Parser::ParseStatList() {
 }
 
 Statement& Parser::ParseStatement() {
-  // Statement -> ';' | IfStat | ExprStat
+  // Statement -> ';' | IfStat | ExprStat | FuncStat
   nodes_.emplace_back(Statement{});
   Statement& statement = std::get<Statement>(nodes_.back());
   switch (current().type) {
@@ -190,6 +193,9 @@ Statement& Parser::ParseStatement() {
       break;
     case Lexeme::Type::kKeywordFor:
       statement.stat = ParseForStat();
+      break;
+    case Lexeme::Type::kKeywordFunction:
+      statement.stat = ParseFuncStat();
       break;
     default:
       statement.stat = ParseExprStat();
@@ -377,6 +383,41 @@ Index& Parser::ParseIndex(SuffixedExp& lhs) {
   nodes_.emplace_back(Index{lhs, ParseExpr()});
   Match(Lexeme::Type::kRightSquareBracket);
   return std::get<Index>(nodes_.back());
+}
+
+FuncStat& Parser::ParseFuncStat() {
+  // FuncStat -> function FuncName '(' [ symbol { ',' symbol } ] ')' StatList
+  //             end
+  Match(Lexeme::Type::kKeywordFunction);
+  FuncName& name = ParseFuncName();
+  Match(Lexeme::Type::kLeftBracket);
+  std::vector<Symbol> params;
+  while (current().type != Lexeme::Type::kRightBracket) {
+    if (current().type == Lexeme::Type::kSymbol) {
+      params.emplace_back(Symbol{current().data.symbol_name});
+    } else {
+      SyntaxError();
+    }
+    Next();
+    if (current().type == Lexeme::Type::kComma) {
+      Next();
+    }
+  }
+  Match(Lexeme::Type::kRightBracket);
+  StatList& body = ParseStatList();
+  Match(Lexeme::Type::kKeywordEnd);
+  nodes_.emplace_back(FuncStat{name, std::move(params), body});
+  return std::get<FuncStat>(nodes_.back());
+}
+
+FuncName& Parser::ParseFuncName() {
+  // FuncName -> symbol
+  if (current().type == Lexeme::Type::kSymbol) {
+    nodes_.emplace_back(FuncName{Symbol{current().data.symbol_name}});
+    Next();
+    return std::get<FuncName>(nodes_.back());
+  }
+  SyntaxError();
 }
 
 bool Parser::is_block_follow() const noexcept {

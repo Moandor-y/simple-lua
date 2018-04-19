@@ -98,6 +98,8 @@ using node::ExprStat;
 using node::Field;
 using node::ForStat;
 using node::FuncCall;
+using node::FuncName;
+using node::FuncStat;
 using node::IfStat;
 using node::Index;
 using node::LiteralFloat;
@@ -141,6 +143,7 @@ class IrEmitter {
   void Emit(const ExprStat&);
   void Emit(const Assignment&);
   void Emit(const ForStat&);
+  void Emit(const FuncStat&);
   Value* Eval(const Expr&);
   Value* Eval(const SimpleExpr&);
   Value* Eval(const Unop&);
@@ -1166,6 +1169,8 @@ Value* IrEmitter::PointerToTableArrayCapacity(Value* table_ptr) {
 Value* IrEmitter::PointerToTableArray(Value* table_ptr) {
   return builder_.CreateStructGEP(table_type_, table_ptr, 3);
 }
+
+void IrEmitter::Emit(const FuncStat&) {}
 }  // namespace
 
 void Emitter::EmitObjectFile(const string& filename) const {

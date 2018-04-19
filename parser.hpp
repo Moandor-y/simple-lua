@@ -45,8 +45,11 @@ struct ForStat;
 struct Constructor;
 struct Field;
 struct Index;
+struct FuncStat;
+struct FuncName;
 
 struct Nil {};
+struct Vararg {};
 
 struct LiteralInt {
   std::int64_t value;
@@ -69,7 +72,8 @@ struct Statement {
 
   std::variant<NullStat, std::reference_wrapper<const IfStat>,
                std::reference_wrapper<const ExprStat>,
-               std::reference_wrapper<const ForStat>>
+               std::reference_wrapper<const ForStat>,
+               std::reference_wrapper<const FuncStat>>
       stat;
 };
 
@@ -197,10 +201,20 @@ struct Index {
   const Expr& rhs;
 };
 
+struct FuncStat {
+  const FuncName& name;
+  std::vector<Symbol> params;
+  const StatList& body;
+};
+
+struct FuncName {
+  Symbol name;
+};
+
 using Node = std::variant<Nil, StatList, Statement, IfStat, TestThenBlock, Expr,
                           SimpleExpr, Unop, Binop, SuffixedExp, PrimaryExp,
                           ExprStat, Assignment, FuncCall, ExpList, ForStat,
-                          Constructor, Field, Index>;
+                          Constructor, Field, Index, FuncStat, FuncName>;
 }  // namespace node
 
 class Parser {
@@ -235,7 +249,7 @@ class Parser {
 
   void Next() { ++pos_; }
 
-  void SyntaxError() const {
+  [[noreturn]] void SyntaxError() const {
     using namespace std::string_literals;
     throw ParserException{"Syntax Error at line "s +
                           std::to_string(current().line_number)};
@@ -265,6 +279,8 @@ class Parser {
   node::Constructor& ParseConstructor();
   node::Field& ParseField();
   node::Index& ParseIndex(node::SuffixedExp& lhs);
+  node::FuncStat& ParseFuncStat();
+  node::FuncName& ParseFuncName();
   bool is_block_follow() const noexcept;
   bool is_unop() const noexcept;
   node::Unop::Type unop_type() const noexcept;
