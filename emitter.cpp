@@ -18,6 +18,7 @@
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -61,11 +62,14 @@ using std::visit;
 using gsl::index;
 
 using llvm::BasicBlock;
+using llvm::Constant;
+using llvm::ConstantDataArray;
 using llvm::ConstantExpr;
 using llvm::ConstantFP;
 using llvm::ConstantStruct;
 using llvm::Function;
 using llvm::FunctionType;
+using llvm::GlobalVariable;
 using llvm::IRBuilder;
 using llvm::InitializeNativeTarget;
 using llvm::InitializeNativeTargetAsmPrinter;
@@ -135,7 +139,8 @@ enum class ArithOp {
 
 class IrEmitter {
  public:
-  IrEmitter(IRBuilder<>&, Module*, const vector<string>& symbols);
+  IrEmitter(IRBuilder<>&, Module*, const vector<string>& symbols,
+            Function* main_func);
 
   void Emit(const StatList&);
   void Emit(const Statement&);
@@ -179,8 +184,11 @@ class IrEmitter {
   Value* PointerToTableArrayCapacity(Value* table_ptr);
   Value* PointerToTableArray(Value* table_ptr);
 
+  const vector<Function*> functions() const { return functions_; }
+
  private:
   IRBuilder<>& builder_;
+  Module* module_;
   StructType* value_type_;
   StructType* table_type_;
 
@@ -210,12 +218,15 @@ class IrEmitter {
   const vector<string>& symbols_;
   unique_ptr<SymbolTable> symbol_table_;
 
+  vector<Function*> functions_;
+
   index temp_name_{};
 };
 
 IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
-                     const vector<string>& symbols)
+                     const vector<string>& symbols, Function* main_func)
     : builder_{builder},
+      module_{module},
       value_type_{StructType::create(
           {builder.getInt64Ty(), builder.getInt64Ty()}, "val_t")},
       table_type_{StructType::create(
@@ -314,20 +325,26 @@ IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
                            Function::ExternalLinkage, "floor", module)},
 
       symbols_{symbols},
-      symbol_table_{std::make_unique<SymbolTable>()}
+      symbol_table_{std::make_unique<SymbolTable>()},
+
+      functions_{main_func}
 
 {
   LLVMContext& context = builder.getContext();
 
   for (const char* builtin_name : {"print"}) {
-    Value* addr = builder.CreateAlloca(value_type_);
-    Value* type_ptr = PointerToType(addr);
-    builder.CreateStore(builder.getInt64(kSluaValueBuiltinFunction), type_ptr);
-    Value* func_name_ptr = builder.CreatePointerCast(
-        PointerToValue(addr),
-        PointerType::getInt8PtrTy(context)->getPointerTo());
-    builder.CreateStore(builder.CreateGlobalStringPtr(builtin_name),
-                        func_name_ptr);
+    Constant* name = ConstantDataArray::getString(context, builtin_name, true);
+    GlobalVariable* name_global = new GlobalVariable(
+        *module, name->getType(), true, GlobalVariable::ExternalLinkage, name);
+    Value* addr = new GlobalVariable(
+        *module, value_type_, true, GlobalVariable::ExternalLinkage,
+        ConstantStruct::get(
+            value_type_,
+            {
+                builder.getInt64(kSluaValueBuiltinFunction),
+                ConstantExpr::getInBoundsGetElementPtr(
+                    name->getType(), name_global, builder.getInt32(0)),
+            }));
     symbol_table_->addr[builtin_name] = addr;
   }
 }
@@ -507,13 +524,34 @@ Value* IrEmitter::Eval(const FuncCall& func_call) {
   builder_.CreateCondBr(is_func, then_block, else_block);
 
   builder_.SetInsertPoint(then_block);
+  EnterScope();
+  Value* arg_table_ptr = LookupSymbol("_temp_" + to_string(temp_name_), true);
+  ++temp_name_;
+  builder_.CreateStore(builder_.getInt64(kSluaValueTable),
+                       PointerToType(arg_table_ptr));
+  builder_.CreateStore(
+      builder_.CreatePtrToInt(builder_.CreateCall(func_table_new_),
+                              builder_.getInt64Ty()),
+      PointerToValue(arg_table_ptr));
+  Value* arg_table = builder_.CreateLoad(arg_table_ptr);
+  for (index i = 0; i < static_cast<index>(args.size()); ++i) {
+    Value* index_ptr = builder_.CreateAlloca(value_type_);
+    builder_.CreateStore(builder_.getInt64(kSluaValueInteger),
+                         PointerToType(index_ptr));
+    builder_.CreateStore(builder_.getInt64(i + 1), PointerToValue(index_ptr));
+    Value* arg_ptr = builder_.CreateCall(
+        func_table_access_, {arg_table, builder_.CreateLoad(index_ptr)});
+    builder_.CreateStore(args[i], arg_ptr);
+  }
+  TableRefInc(arg_table);
   Value* result = builder_.CreateCall(
-      FunctionType::get(value_type_, {}, true),
-      builder_.CreateIntToPtr(
-          ExtractValue(func),
-          PointerType::getUnqual(FunctionType::get(value_type_, {}, true))),
-      args);
+      FunctionType::get(value_type_, {value_type_}, false),
+      builder_.CreateIntToPtr(ExtractValue(func),
+                              PointerType::getUnqual(FunctionType::get(
+                                  value_type_, {value_type_}, false))),
+      {arg_table});
   builder_.CreateStore(result, result_ptr);
+  LeaveScope();
   builder_.CreateBr(post_block);
 
   builder_.SetInsertPoint(else_block);
@@ -1170,12 +1208,46 @@ Value* IrEmitter::PointerToTableArray(Value* table_ptr) {
   return builder_.CreateStructGEP(table_type_, table_ptr, 3);
 }
 
-void IrEmitter::Emit(const FuncStat&) {}
+void IrEmitter::Emit(const FuncStat& func_stat) {
+  Function* func =
+      Function::Create(FunctionType::get(value_type_, {value_type_}, false),
+                       Function::ExternalLinkage, "", module_);
+  BasicBlock* entry_block =
+      BasicBlock::Create(builder_.getContext(), "entry", func);
+  BasicBlock* outer_block = builder_.GetInsertBlock();
+  builder_.SetInsertPoint(entry_block);
+
+  EnterScope();
+  for (index i = 0; i < static_cast<index>(func_stat.params.size()); ++i) {
+    const string& name = symbols_[func_stat.params[i].name];
+    Value* ptr = LookupSymbol(name, true);
+    Value* index = ConstantStruct::get(
+        value_type_,
+        {builder_.getInt64(kSluaValueInteger), builder_.getInt64(i + 1)});
+    Value* source_ptr =
+        builder_.CreateCall(func_table_access_, {func->arg_begin(), index});
+    builder_.CreateStore(builder_.CreateLoad(source_ptr), ptr);
+  }
+  Emit(func_stat.body);
+  LeaveScope();
+  builder_.CreateRet(ConstantStruct::get(
+      value_type_, {builder_.getInt64(kSluaValueNil), builder_.getInt64(0)}));
+
+  builder_.SetInsertPoint(outer_block);
+  Value* ptr = LookupSymbol(symbols_[func_stat.name.name.name], false);
+  Value* type_ptr = PointerToType(ptr);
+  Value* value_ptr = PointerToValue(ptr);
+  builder_.CreateStore(builder_.getInt64(kSluaValueFunction), type_ptr);
+  builder_.CreateStore(builder_.CreateBitCast(func, builder_.getInt64Ty()),
+                       value_ptr);
+
+  functions_.push_back(func);
+}
 }  // namespace
 
 void Emitter::EmitObjectFile(const string& filename) const {
   LLVMContext context;
-  unique_ptr<Module> module = std::make_unique<Module>("", context);
+  unique_ptr<Module> module = std::make_unique<Module>("slua_module", context);
   FunctionPassManager fpm{module.get()};
   PassManager pm;
 
@@ -1198,20 +1270,25 @@ void Emitter::EmitObjectFile(const string& filename) const {
   BasicBlock* entry_block = BasicBlock::Create(context, "entry", slua_main);
   builder.SetInsertPoint(entry_block);
 
-  IrEmitter emitter{builder, module.get(), symbol_table_};
+  IrEmitter emitter{builder, module.get(), symbol_table_, slua_main};
   emitter.EnterScope();
   emitter.Emit(parser_.root());
   emitter.LeaveScope();
   builder.CreateRetVoid();
 
-  if (verifyFunction(*slua_main, &llvm::errs())) {
-    throw runtime_error{"Function verification failed"};
+  for (Function* func : emitter.functions()) {
+    if (verifyFunction(*func, &llvm::errs())) {
+      func->print(llvm::errs());
+      throw runtime_error{"Function verification failed"};
+    }
   }
   if (verifyModule(*module, &llvm::errs())) {
     throw runtime_error{"Module verification failed"};
   }
 
-  fpm.run(*slua_main);
+  for (Function* func : emitter.functions()) {
+    fpm.run(*func);
+  }
 
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
