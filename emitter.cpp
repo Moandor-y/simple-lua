@@ -110,6 +110,7 @@ using node::LiteralFloat;
 using node::LiteralInt;
 using node::Nil;
 using node::PrimaryExp;
+using node::RetStat;
 using node::SimpleExpr;
 using node::StatList;
 using node::Statement;
@@ -121,6 +122,7 @@ using node::Unop;
 struct SymbolTable {
   unordered_map<string, Value*> addr;
   unique_ptr<SymbolTable> next;
+  Function* func;
 };
 
 enum class ArithOp {
@@ -149,6 +151,7 @@ class IrEmitter {
   void Emit(const Assignment&);
   void Emit(const ForStat&);
   void Emit(const FuncStat&);
+  void Emit(const RetStat&);
   Value* Eval(const Expr&);
   Value* Eval(const SimpleExpr&);
   Value* Eval(const Unop&);
@@ -175,6 +178,7 @@ class IrEmitter {
   Value* CallOverloadedOp(Value*, Value*, ArithOp);
   void EnterScope();
   void LeaveScope();
+  void EmitDestroyScope(SymbolTable&);
   BasicBlock* CreateBlock(const string& name);
   void TableRefInc(Value*);
   void TableRefDec(Value*);
@@ -219,6 +223,7 @@ class IrEmitter {
   unique_ptr<SymbolTable> symbol_table_;
 
   vector<Function*> functions_;
+  Function* curr_func_;
 
   index temp_name_{};
 };
@@ -327,7 +332,8 @@ IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
       symbols_{symbols},
       symbol_table_{std::make_unique<SymbolTable>()},
 
-      functions_{main_func}
+      functions_{main_func},
+      curr_func_{main_func}
 
 {
   LLVMContext& context = builder.getContext();
@@ -335,9 +341,9 @@ IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
   for (const char* builtin_name : {"print"}) {
     Constant* name = ConstantDataArray::getString(context, builtin_name, true);
     GlobalVariable* name_global = new GlobalVariable(
-        *module, name->getType(), true, GlobalVariable::ExternalLinkage, name);
+        *module, name->getType(), true, GlobalVariable::PrivateLinkage, name);
     Value* addr = new GlobalVariable(
-        *module, value_type_, true, GlobalVariable::ExternalLinkage,
+        *module, value_type_, true, GlobalVariable::PrivateLinkage,
         ConstantStruct::get(
             value_type_,
             {
@@ -646,11 +652,15 @@ Value* IrEmitter::LookupSymbol(const string& name, bool is_local) {
   }
   if (iter == table->addr.end()) {
     Value*& addr = is_local ? symbol_table_->addr[name] : table->addr[name];
-    addr = builder_.CreateAlloca(value_type_);
-    builder_.CreateStore(
-        ConstantStruct::get(value_type_, {builder_.getInt64(kSluaValueNil),
-                                          builder_.getInt64(0)}),
-        addr);
+    Constant* nil = ConstantStruct::get(
+        value_type_, {builder_.getInt64(kSluaValueNil), builder_.getInt64(0)});
+    if (is_local) {
+      addr = builder_.CreateAlloca(value_type_);
+      builder_.CreateStore(nil, addr);
+    } else {
+      addr = new GlobalVariable(*module_, value_type_, false,
+                                GlobalVariable::PrivateLinkage, nil);
+    }
     return addr;
   }
   return iter->second;
@@ -667,6 +677,7 @@ Value* IrEmitter::ExtractValue(Value* value) {
 void IrEmitter::EnterScope() {
   unique_ptr<SymbolTable> table = std::make_unique<SymbolTable>();
   table->next = move(symbol_table_);
+  table->func = curr_func_;
   symbol_table_ = move(table);
 }
 
@@ -675,7 +686,14 @@ void IrEmitter::LeaveScope() {
     throw runtime_error{"Cannot leave global scope"};
   }
 
-  for (const auto& symbol : symbol_table_->addr) {
+  EmitDestroyScope(*symbol_table_);
+
+  unique_ptr<SymbolTable> table = move(symbol_table_->next);
+  symbol_table_ = move(table);
+}
+
+void IrEmitter::EmitDestroyScope(SymbolTable& symbol_table) {
+  for (const auto& symbol : symbol_table.addr) {
     Value* value_ptr = symbol.second;
     Value* value = builder_.CreateLoad(value_ptr);
     Value* type = ExtractType(value);
@@ -693,9 +711,6 @@ void IrEmitter::LeaveScope() {
 
     builder_.SetInsertPoint(post_block);
   }
-
-  unique_ptr<SymbolTable> table = move(symbol_table_->next);
-  symbol_table_ = move(table);
 }
 
 void IrEmitter::Emit(const ForStat& for_stat) {
@@ -1217,6 +1232,8 @@ void IrEmitter::Emit(const FuncStat& func_stat) {
   BasicBlock* outer_block = builder_.GetInsertBlock();
   builder_.SetInsertPoint(entry_block);
 
+  Function* outer_func = curr_func_;
+  curr_func_ = func;
   EnterScope();
   for (index i = 0; i < static_cast<index>(func_stat.params.size()); ++i) {
     const string& name = symbols_[func_stat.params[i].name];
@@ -1232,6 +1249,7 @@ void IrEmitter::Emit(const FuncStat& func_stat) {
   LeaveScope();
   builder_.CreateRet(ConstantStruct::get(
       value_type_, {builder_.getInt64(kSluaValueNil), builder_.getInt64(0)}));
+  curr_func_ = outer_func;
 
   builder_.SetInsertPoint(outer_block);
   Value* ptr = LookupSymbol(symbols_[func_stat.name.name.name], false);
@@ -1242,6 +1260,23 @@ void IrEmitter::Emit(const FuncStat& func_stat) {
                        value_ptr);
 
   functions_.push_back(func);
+}
+
+void IrEmitter::Emit(const RetStat& ret_stat) {
+  Value* ret_value;
+  if (ret_stat.expr.has_value()) {
+    ret_value = Eval(ret_stat.expr.value());
+  } else {
+    ret_value = ConstantStruct::get(
+        value_type_, {builder_.getInt64(kSluaValueNil), builder_.getInt64(0)});
+  }
+  SymbolTable* table = symbol_table_.get();
+  while (table->func == curr_func_) {
+    EmitDestroyScope(*table);
+    table = table->next.get();
+  }
+  builder_.CreateRet(ret_value);
+  builder_.SetInsertPoint(CreateBlock("dummy"));
 }
 }  // namespace
 
@@ -1283,6 +1318,7 @@ void Emitter::EmitObjectFile(const string& filename) const {
     }
   }
   if (verifyModule(*module, &llvm::errs())) {
+    module->print(llvm::errs(), nullptr);
     throw runtime_error{"Module verification failed"};
   }
 

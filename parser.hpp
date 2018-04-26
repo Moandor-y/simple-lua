@@ -47,6 +47,7 @@ struct Field;
 struct Index;
 struct FuncStat;
 struct FuncName;
+struct RetStat;
 
 struct Nil {};
 struct Vararg {};
@@ -73,7 +74,8 @@ struct Statement {
   std::variant<NullStat, std::reference_wrapper<const IfStat>,
                std::reference_wrapper<const ExprStat>,
                std::reference_wrapper<const ForStat>,
-               std::reference_wrapper<const FuncStat>>
+               std::reference_wrapper<const FuncStat>,
+               std::reference_wrapper<const RetStat>>
       stat;
 };
 
@@ -211,10 +213,15 @@ struct FuncName {
   Symbol name;
 };
 
-using Node = std::variant<Nil, StatList, Statement, IfStat, TestThenBlock, Expr,
-                          SimpleExpr, Unop, Binop, SuffixedExp, PrimaryExp,
-                          ExprStat, Assignment, FuncCall, ExpList, ForStat,
-                          Constructor, Field, Index, FuncStat, FuncName>;
+struct RetStat {
+  std::optional<std::reference_wrapper<const Expr>> expr;
+};
+
+using Node =
+    std::variant<Nil, StatList, Statement, IfStat, TestThenBlock, Expr,
+                 SimpleExpr, Unop, Binop, SuffixedExp, PrimaryExp, ExprStat,
+                 Assignment, FuncCall, ExpList, ForStat, Constructor, Field,
+                 Index, FuncStat, FuncName, RetStat>;
 }  // namespace node
 
 class Parser {
@@ -281,6 +288,7 @@ class Parser {
   node::Index& ParseIndex(node::SuffixedExp& lhs);
   node::FuncStat& ParseFuncStat();
   node::FuncName& ParseFuncName();
+  node::RetStat& ParseRetStat();
   bool is_block_follow() const noexcept;
   bool is_unop() const noexcept;
   node::Unop::Type unop_type() const noexcept;

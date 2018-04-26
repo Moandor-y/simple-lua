@@ -66,6 +66,7 @@ using node::LiteralFloat;
 using node::LiteralInt;
 using node::Nil;
 using node::PrimaryExp;
+using node::RetStat;
 using node::SimpleExpr;
 using node::StatList;
 using node::Statement;
@@ -196,6 +197,9 @@ Statement& Parser::ParseStatement() {
       break;
     case Lexeme::Type::kKeywordFunction:
       statement.stat = ParseFuncStat();
+      break;
+    case Lexeme::Type::kKeywordReturn:
+      statement.stat = ParseRetStat();
       break;
     default:
       statement.stat = ParseExprStat();
@@ -418,6 +422,21 @@ FuncName& Parser::ParseFuncName() {
     return std::get<FuncName>(nodes_.back());
   }
   SyntaxError();
+}
+
+RetStat& Parser::ParseRetStat() {
+  // RetStat -> return [ expr ] [ ';' ]
+  Match(Lexeme::Type::kKeywordReturn);
+  nodes_.emplace_back(RetStat{});
+  RetStat& ret = std::get<RetStat>(nodes_.back());
+  if (is_block_follow() || current().type == Lexeme::Type::kSemicolon) {
+    if (current().type == Lexeme::Type::kSemicolon) {
+      Next();
+    }
+    return ret;
+  }
+  ret.expr = ParseExpr();
+  return ret;
 }
 
 bool Parser::is_block_follow() const noexcept {
