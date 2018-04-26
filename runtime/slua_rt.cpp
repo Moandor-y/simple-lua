@@ -27,6 +27,7 @@ using std::terminate;
 using std::unordered_map;
 using std::vector;
 
+using gsl::make_span;
 using gsl::span;
 
 unordered_map<string, function<SluaValue(vector<SluaValue>&)>>
@@ -173,6 +174,11 @@ void slua_table_ref_dec(SluaTable* table) noexcept {
 #ifndef NDEBUG
     cout << "Table deallocated: " << table << '\n';
 #endif
+    for (SluaValue& value : make_span(table->array_ptr, table->array_size)) {
+      if (value.type == kSluaValueTable) {
+        slua_table_ref_dec(static_cast<SluaTable*>(value.value.address));
+      }
+    }
     delete[] table->array_ptr;
     auto iter = table_iters.find(table);
     tables.erase(iter->second);

@@ -1163,6 +1163,19 @@ void IrEmitter::TableArrayAppend(Value* value, Value* table_ptr) {
 
   size = builder_.CreateAdd(size, builder_.getInt64(1));
   builder_.CreateStore(size, size_ptr);
+
+  BasicBlock* is_table_block = CreateBlock("array_append_is_table");
+  post_block = CreateBlock("array_append_is_table_post");
+
+  cmp = builder_.CreateICmpEQ(ExtractType(value),
+                              builder_.getInt64(kSluaValueTable));
+  builder_.CreateCondBr(cmp, is_table_block, post_block);
+
+  builder_.SetInsertPoint(is_table_block);
+  TableRefInc(value);
+  builder_.CreateBr(post_block);
+
+  builder_.SetInsertPoint(post_block);
 }
 
 Value* IrEmitter::Eval(const Field& field) {
