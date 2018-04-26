@@ -139,6 +139,11 @@ enum class ArithOp {
   kEq,
 };
 
+enum class LogicOp {
+  kAnd,
+  kOr,
+};
+
 class IrEmitter {
  public:
   IrEmitter(IRBuilder<>&, Module*, const vector<string>& symbols,
@@ -163,6 +168,7 @@ class IrEmitter {
   Value* Eval(const Field&);
   Value* Eval(const Index&);
   Value* EvalArith(Value*, Value*, ArithOp);
+  Value* EvalLogic(Value*, Value*, LogicOp);
   Value* EvalIntArith(Value*, Value*, ArithOp);
   Value* EvalFloatArith(Value*, Value*, ArithOp);
   Value* Addr(const SuffixedExp&, bool is_local);
@@ -462,6 +468,10 @@ Value* IrEmitter::Eval(const Binop& op) {
       return EvalArith(lhs, rhs, ArithOp::kGreaterEq);
     case node::Binop::kEq:
       return EvalArith(lhs, rhs, ArithOp::kEq);
+    case node::Binop::kAnd:
+      return EvalLogic(lhs, rhs, LogicOp::kAnd);
+    case node::Binop::kOr:
+      return EvalLogic(lhs, rhs, LogicOp::kOr);
     default:
       throw runtime_error{"Not implemented"};
   }
@@ -843,10 +853,21 @@ Value* IrEmitter::EvalArith(Value* lhs, Value* rhs, ArithOp op) {
       builder_.CreateBr(post_block);
 
       builder_.SetInsertPoint(error_block);
-      builder_.CreateCall(func_runtime_error_,
-                          builder_.CreateGlobalStringPtr(
-                              "Error: cannot perform arithmetic operation"));
-      builder_.CreateUnreachable();
+      if (op == ArithOp::kEq) {
+        Value* type_cmp = builder_.CreateICmpEQ(lhs_type, rhs_type);
+        Value* value_cmp = builder_.CreateICmpEQ(lhs_value, rhs_value);
+        Value* eq_cmp = builder_.CreateAnd(type_cmp, value_cmp);
+        builder_.CreateStore(builder_.getInt64(kSluaValueBool),
+                             PointerToType(result_ptr));
+        builder_.CreateStore(builder_.CreateZExt(eq_cmp, builder_.getInt64Ty()),
+                             PointerToValue(result_ptr));
+        builder_.CreateBr(post_block);
+      } else {
+        builder_.CreateCall(func_runtime_error_,
+                            builder_.CreateGlobalStringPtr(
+                                "Error: cannot perform arithmetic operation"));
+        builder_.CreateUnreachable();
+      }
 
       builder_.SetInsertPoint(post_block);
       return builder_.CreateLoad(result_ptr);
@@ -1155,60 +1176,6 @@ Value* IrEmitter::Eval(const Index& in) {
 
 Value* IrEmitter::Addr(const Index& in) {
   return builder_.CreateCall(func_table_access_, {Eval(in.lhs), Eval(in.rhs)});
-
-  //  Value* lhs = Eval(in.lhs);
-  //  Value* lhs_type = ExtractType(lhs);
-  //  Value* rhs = Eval(in.rhs);
-  //  Value* rhs_type = ExtractType(rhs);
-  //
-  //  BasicBlock* check_fail_block = CreateBlock("index_check_fail");
-  //  BasicBlock* check_post_block = CreateBlock("index_check_post");
-  //
-  //  Value* cmp = builder_.CreateAnd(
-  //      builder_.CreateICmpEQ(lhs_type, builder_.getInt64(kSluaValueTable)),
-  //      builder_.CreateICmpEQ(rhs_type,
-  //      builder_.getInt64(kSluaValueInteger)));
-  //  builder_.CreateCondBr(cmp, check_post_block, check_fail_block);
-  //
-  //  builder_.SetInsertPoint(check_fail_block);
-  //  builder_.CreateCall(
-  //      func_runtime_error_,
-  //      {builder_.CreateGlobalStringPtr("Error: cannot perform index")});
-  //  builder_.CreateUnreachable();
-  //
-  //  builder_.SetInsertPoint(check_post_block);
-  //  Value* table_ptr = GetTablePtr(lhs);
-  //  Value* size = builder_.CreateLoad(PointerToTableArraySize(table_ptr));
-  //  Value* rhs_value = ExtractValue(rhs);
-  //  Value* result_ptr =
-  //      builder_.CreateAlloca(PointerType::getUnqual(value_type_));
-  //
-  //  BasicBlock* access_block = CreateBlock("index_access");
-  //  BasicBlock* test_append_block = CreateBlock("index_test_append");
-  //  BasicBlock* append_block = CreateBlock("index_append");
-  //  BasicBlock* post_block = CreateBlock("index_post");
-  //
-  //  cmp = builder_.CreateICmpULT(rhs_value, size);
-  //  builder_.CreateCondBr(cmp, access_block, test_append_block);
-  //
-  //  builder_.SetInsertPoint(access_block);
-  //  Value* array_ptr = builder_.CreateLoad(PointerToTableArray(table_ptr));
-  //  Value* result = builder_.CreateInBoundsGEP(value_type_, array_ptr,
-  //  rhs_value); builder_.CreateLoad(result, result_ptr);
-  //  builder_.CreateBr(post_block);
-  //
-  //  builder_.SetInsertPoint(test_append_block);
-  //  cmp = builder_.CreateICmpULT(rhs_value,
-  //                               builder_.CreateAdd(size,
-  //                               builder_.getInt64(1)));
-  //  builder_.CreateCondBr(cmp, append_block, check_fail_block);
-  //
-  //  builder_.SetInsertPoint(append_block);
-  //  builder_.CreateCall(func_table_array_grow_, {table_ptr});
-  //  builder_.CreateBr(access_block);
-  //
-  //  builder_.SetInsertPoint(post_block);
-  //  return builder_.CreateLoad(result_ptr);
 }
 
 Value* IrEmitter::PointerToTableArraySize(Value* table_ptr) {
@@ -1227,6 +1194,14 @@ void IrEmitter::Emit(const FuncStat& func_stat) {
   Function* func =
       Function::Create(FunctionType::get(value_type_, {value_type_}, false),
                        Function::ExternalLinkage, "", module_);
+  Value* ptr = LookupSymbol(symbols_[func_stat.name.name.name], false);
+  Value* type_ptr = PointerToType(ptr);
+  Value* value_ptr = PointerToValue(ptr);
+  builder_.CreateStore(builder_.getInt64(kSluaValueFunction), type_ptr);
+  builder_.CreateStore(builder_.CreateBitCast(func, builder_.getInt64Ty()),
+                       value_ptr);
+  functions_.push_back(func);
+
   BasicBlock* entry_block =
       BasicBlock::Create(builder_.getContext(), "entry", func);
   BasicBlock* outer_block = builder_.GetInsertBlock();
@@ -1252,14 +1227,6 @@ void IrEmitter::Emit(const FuncStat& func_stat) {
   curr_func_ = outer_func;
 
   builder_.SetInsertPoint(outer_block);
-  Value* ptr = LookupSymbol(symbols_[func_stat.name.name.name], false);
-  Value* type_ptr = PointerToType(ptr);
-  Value* value_ptr = PointerToValue(ptr);
-  builder_.CreateStore(builder_.getInt64(kSluaValueFunction), type_ptr);
-  builder_.CreateStore(builder_.CreateBitCast(func, builder_.getInt64Ty()),
-                       value_ptr);
-
-  functions_.push_back(func);
 }
 
 void IrEmitter::Emit(const RetStat& ret_stat) {
@@ -1277,6 +1244,28 @@ void IrEmitter::Emit(const RetStat& ret_stat) {
   }
   builder_.CreateRet(ret_value);
   builder_.SetInsertPoint(CreateBlock("dummy"));
+}
+
+Value* IrEmitter::EvalLogic(Value* lhs, Value* rhs, LogicOp op) {
+  Value* lhs_bool = ToBool(lhs);
+  Value* rhs_bool = ToBool(rhs);
+  Value* result_value;
+  switch (op) {
+    case LogicOp::kAnd:
+      result_value = builder_.CreateAnd(lhs_bool, rhs_bool);
+      break;
+    case LogicOp::kOr:
+      result_value = builder_.CreateOr(lhs_bool, rhs_bool);
+      break;
+    default:
+      throw runtime_error{"Logical op not implemented"};
+  }
+  Value* result_ptr = builder_.CreateAlloca(value_type_);
+  builder_.CreateStore(builder_.getInt64(kSluaValueBool),
+                       PointerToType(result_ptr));
+  builder_.CreateStore(builder_.CreateZExt(result_value, builder_.getInt64Ty()),
+                       PointerToValue(result_ptr));
+  return builder_.CreateLoad(result_ptr);
 }
 }  // namespace
 
