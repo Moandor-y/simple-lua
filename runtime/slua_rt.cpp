@@ -67,7 +67,7 @@ SluaValue slua_print(vector<SluaValue>& args) noexcept {
     }
   }
   cout << '\n';
-  return SluaValue{kSluaValueNil};
+  return SluaValue{kSluaValueNil, {0}};
 }
 
 [[noreturn]] void slua_runtime_error(const char* message) noexcept {
