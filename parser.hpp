@@ -54,7 +54,6 @@ struct FuncBody;
 struct FuncExpr;
 
 struct Nil {};
-struct Vararg {};
 
 struct LiteralInt {
   std::int64_t value;
@@ -74,8 +73,9 @@ struct StatList {
 
 struct Statement {
   struct NullStat {};
+  struct BreakStat {};
 
-  std::variant<NullStat, std::reference_wrapper<const IfStat>,
+  std::variant<NullStat, BreakStat, std::reference_wrapper<const IfStat>,
                std::reference_wrapper<const ExprStat>,
                std::reference_wrapper<const ForStat>,
                std::reference_wrapper<const FuncStat>,

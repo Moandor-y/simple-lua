@@ -50,6 +50,7 @@ using std::error_code;
 using std::get;
 using std::holds_alternative;
 using std::is_same_v;
+using std::make_unique;
 using std::move;
 using std::runtime_error;
 using std::string;
@@ -165,6 +166,7 @@ class IrEmitter {
   void Emit(const LocalFunc&);
   void Emit(const FuncBody&, Function*);
   void EmitAssignment(Value* addr, Value* value);
+  void EmitBreak();
   Value* Eval(const Expr&);
   Value* Eval(const SimpleExpr&);
   Value* Eval(const Unop&);
@@ -243,6 +245,11 @@ class IrEmitter {
   Function* curr_func_;
 
   index temp_name_{};
+
+  struct {
+    BasicBlock* post_block;
+    SymbolTable* scope;
+  } break_info_{};
 };
 
 IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
@@ -347,7 +354,7 @@ IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
                            Function::ExternalLinkage, "floor", module)},
 
       symbols_{symbols},
-      symbol_table_{std::make_unique<SymbolTable>()},
+      symbol_table_{make_unique<SymbolTable>()},
 
       functions_{main_func},
       curr_func_{main_func}
@@ -382,6 +389,7 @@ void IrEmitter::Emit(const Statement& stat) {
   visit(
       Overloaded{
           [this](const auto& ref) { Emit(ref.get()); },
+          [this](Statement::BreakStat) { EmitBreak(); },
           [](Statement::NullStat) {},
       },
       stat.stat);
@@ -399,7 +407,9 @@ void IrEmitter::Emit(const IfStat& if_stat) {
     builder_.CreateCondBr(cmp, then_block, next_block);
     builder_.SetInsertPoint(then_block);
 
+    EnterScope();
     Emit(then.get().then);
+    LeaveScope();
 
     builder_.CreateBr(post_block);
     builder_.SetInsertPoint(next_block);
@@ -704,7 +714,7 @@ Value* IrEmitter::ExtractValue(Value* value) {
 }
 
 void IrEmitter::EnterScope() {
-  unique_ptr<SymbolTable> table = std::make_unique<SymbolTable>();
+  unique_ptr<SymbolTable> table = make_unique<SymbolTable>();
   table->next = move(symbol_table_);
   table->func = curr_func_;
   symbol_table_ = move(table);
@@ -743,16 +753,19 @@ void IrEmitter::EmitDestroyScope(SymbolTable& symbol_table) {
 }
 
 void IrEmitter::Emit(const ForStat& for_stat) {
+  BasicBlock* test_block = CreateBlock("for_test");
+  BasicBlock* body_block = CreateBlock("for_body");
+  BasicBlock* post_block = CreateBlock("for_post");
+
   EnterScope();
+  auto outer_break_info = break_info_;
+  break_info_ = {post_block, symbol_table_.get()};
   Value* count = Addr(for_stat.symbol, true);
   Value* init = Eval(for_stat.initial);
   Value* limit = Eval(for_stat.limit);
   Value* step = Eval(for_stat.step);
   builder_.CreateStore(init, count);
 
-  BasicBlock* test_block = CreateBlock("for_test");
-  BasicBlock* body_block = CreateBlock("for_body");
-  BasicBlock* post_block = CreateBlock("for_post");
   builder_.CreateBr(test_block);
 
   builder_.SetInsertPoint(test_block);
@@ -762,13 +775,18 @@ void IrEmitter::Emit(const ForStat& for_stat) {
   builder_.CreateCondBr(cmp, body_block, post_block);
 
   builder_.SetInsertPoint(body_block);
+
+  EnterScope();
   Emit(for_stat.body);
+  LeaveScope();
+
   value = builder_.CreateLoad(count);
   Value* next = EvalArith(value, step, ArithOp::kAdd);
   builder_.CreateStore(next, count);
   builder_.CreateBr(test_block);
 
   builder_.SetInsertPoint(post_block);
+  break_info_ = outer_break_info;
   LeaveScope();
 }
 
@@ -1198,8 +1216,8 @@ void IrEmitter::TableArrayAppend(Value* value, Value* table_ptr) {
 }
 
 Value* IrEmitter::Eval(const Field& field) {
-  return std::visit([this](const auto& ref) { return Eval(ref.get()); },
-                    field.field);
+  return visit([this](const auto& ref) { return Eval(ref.get()); },
+               field.field);
 }
 
 Value* IrEmitter::Eval(const Index& in) {
@@ -1242,7 +1260,7 @@ void IrEmitter::Emit(const RetStat& ret_stat) {
     table = table->next.get();
   }
   builder_.CreateRet(ret_value);
-  builder_.SetInsertPoint(CreateBlock("dummy"));
+  builder_.SetInsertPoint(CreateBlock("return_dummy"));
 }
 
 Value* IrEmitter::EvalLogic(Value* lhs, Value* rhs, LogicOp op) {
@@ -1323,6 +1341,20 @@ Function* IrEmitter::CreateFunc(Value* ptr) {
                        PointerToValue(ptr));
   functions_.push_back(func);
   return func;
+}
+
+void IrEmitter::EmitBreak() {
+  if (break_info_.post_block == nullptr || break_info_.scope == nullptr) {
+    throw ParserException{"Error: cannot break here"};
+  }
+  SymbolTable* scope = symbol_table_.get();
+  while (scope != break_info_.scope) {
+    EmitDestroyScope(*scope);
+    scope = scope->next.get();
+  }
+  builder_.CreateBr(break_info_.post_block);
+
+  builder_.SetInsertPoint(CreateBlock("break_dummy"));
 }
 }  // namespace
 

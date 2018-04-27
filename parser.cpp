@@ -203,7 +203,7 @@ StatList& Parser::ParseStatList() {
 
 Statement& Parser::ParseStatement() {
   // Statement -> ';' | IfStat | ForStat | FuncStat | RetStat | LocalStat |
-  //              LocalFunc | ExprStat
+  //              LocalFunc | break | ExprStat
   nodes_.emplace_back(Statement{});
   Statement& statement = get<Statement>(nodes_.back());
   switch (current().type) {
@@ -228,6 +228,10 @@ Statement& Parser::ParseStatement() {
       } else {
         statement.stat = ParseLocalStat();
       }
+      break;
+    case Lexeme::Type::kKeywordBreak:
+      statement.stat = Statement::BreakStat{};
+      Next();
       break;
     default:
       statement.stat = ParseExprStat();
