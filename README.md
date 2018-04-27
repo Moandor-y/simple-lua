@@ -14,7 +14,7 @@ A compiler which compiles (a subset of) lua to machine code.
 - [ ] Repeat statement
 - [ ] Break statement
 - [x] Function
-- [ ] Local variable
+- [x] Local variable
 - [x] Table array part
 - [ ] Table hash part
 - [x] Table indexing
