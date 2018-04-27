@@ -103,6 +103,7 @@ using node::Field;
 using node::ForStat;
 using node::FuncBody;
 using node::FuncCall;
+using node::FuncExpr;
 using node::FuncName;
 using node::FuncStat;
 using node::IfStat;
@@ -174,6 +175,7 @@ class IrEmitter {
   Value* Eval(const Constructor&);
   Value* Eval(const Field&);
   Value* Eval(const Index&);
+  Value* Eval(const FuncExpr&);
   Value* EvalArith(Value*, Value*, ArithOp);
   Value* EvalLogic(Value*, Value*, LogicOp);
   Value* EvalIntArith(Value*, Value*, ArithOp);
@@ -201,6 +203,7 @@ class IrEmitter {
   Value* PointerToTableArraySize(Value* table_ptr);
   Value* PointerToTableArrayCapacity(Value* table_ptr);
   Value* PointerToTableArray(Value* table_ptr);
+  Function* CreateFunc(Value* ptr);
 
   const vector<Function*> functions() const { return functions_; }
 
@@ -1220,16 +1223,8 @@ Value* IrEmitter::PointerToTableArray(Value* table_ptr) {
 }
 
 void IrEmitter::Emit(const FuncStat& func_stat) {
-  Function* func =
-      Function::Create(FunctionType::get(value_type_, {value_type_}, false),
-                       Function::ExternalLinkage, "", module_);
   Value* ptr = Addr(func_stat.name.name, false);
-  builder_.CreateStore(builder_.getInt64(kSluaValueFunction),
-                       PointerToType(ptr));
-  builder_.CreateStore(builder_.CreateBitCast(func, builder_.getInt64Ty()),
-                       PointerToValue(ptr));
-  functions_.push_back(func);
-
+  Function* func = CreateFunc(ptr);
   Emit(func_stat.body, func);
 }
 
@@ -1306,17 +1301,28 @@ void IrEmitter::Emit(const LocalStat& stat) {
 }
 
 void IrEmitter::Emit(const LocalFunc& local_func) {
+  Value* ptr = Addr(local_func.name, true);
+  Function* func = CreateFunc(ptr);
+  Emit(local_func.body, func);
+}
+
+Value* IrEmitter::Eval(const FuncExpr& func_expr) {
+  Value* ptr = builder_.CreateAlloca(value_type_);
+  Function* func = CreateFunc(ptr);
+  Emit(func_expr.body, func);
+  return builder_.CreateLoad(ptr);
+}
+
+Function* IrEmitter::CreateFunc(Value* ptr) {
   Function* func =
       Function::Create(FunctionType::get(value_type_, {value_type_}, false),
                        Function::ExternalLinkage, "", module_);
-  Value* ptr = Addr(local_func.name, true);
   builder_.CreateStore(builder_.getInt64(kSluaValueFunction),
                        PointerToType(ptr));
   builder_.CreateStore(builder_.CreateBitCast(func, builder_.getInt64Ty()),
                        PointerToValue(ptr));
   functions_.push_back(func);
-
-  Emit(local_func.body, func);
+  return func;
 }
 }  // namespace
 

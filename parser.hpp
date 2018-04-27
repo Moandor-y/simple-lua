@@ -51,6 +51,7 @@ struct RetStat;
 struct LocalStat;
 struct LocalFunc;
 struct FuncBody;
+struct FuncExpr;
 
 struct Nil {};
 struct Vararg {};
@@ -104,7 +105,8 @@ struct Expr {
 struct SimpleExpr {
   std::variant<Nil, LiteralInt, LiteralFloat,
                std::reference_wrapper<const SuffixedExp>,
-               std::reference_wrapper<const Constructor>>
+               std::reference_wrapper<const Constructor>,
+               std::reference_wrapper<const FuncExpr>>
       expr;
 };
 
@@ -236,11 +238,15 @@ struct FuncBody {
   const StatList& body;
 };
 
+struct FuncExpr {
+  const FuncBody& body;
+};
+
 using Node = std::variant<Nil, StatList, Statement, IfStat, TestThenBlock, Expr,
                           SimpleExpr, Unop, Binop, SuffixedExp, PrimaryExp,
                           ExprStat, Assignment, FuncCall, ExpList, ForStat,
                           Constructor, Field, Index, FuncStat, FuncName,
-                          RetStat, LocalStat, LocalFunc, FuncBody>;
+                          RetStat, LocalStat, LocalFunc, FuncBody, FuncExpr>;
 }  // namespace node
 
 class Parser {
@@ -311,6 +317,7 @@ class Parser {
   node::LocalStat& ParseLocalStat();
   node::LocalFunc& ParseLocalFunc();
   node::FuncBody& ParseFuncBody();
+  node::FuncExpr& ParseFuncExpr();
   bool is_block_follow() const noexcept;
   bool is_unop() const noexcept;
   node::Unop::Type unop_type() const noexcept;

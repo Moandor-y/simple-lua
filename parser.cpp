@@ -59,6 +59,7 @@ using node::Field;
 using node::ForStat;
 using node::FuncBody;
 using node::FuncCall;
+using node::FuncExpr;
 using node::FuncName;
 using node::FuncStat;
 using node::IfStat;
@@ -136,6 +137,9 @@ SimpleExpr& Parser::ParseSimpleExpr() {
       break;
     case Lexeme::Type::kLeftBrace:
       nodes_.emplace_back(SimpleExpr{ParseConstructor()});
+      break;
+    case Lexeme::Type::kKeywordFunction:
+      nodes_.emplace_back(SimpleExpr{ParseFuncExpr()});
       break;
     default:
       nodes_.emplace_back(SimpleExpr{ParseSuffixedExp()});
@@ -481,6 +485,13 @@ FuncBody& Parser::ParseFuncBody() {
   Match(Lexeme::Type::kKeywordEnd);
   nodes_.emplace_back(FuncBody{std::move(params), body});
   return std::get<FuncBody>(nodes_.back());
+}
+
+FuncExpr& Parser::ParseFuncExpr() {
+  // FuncExpr -> function FuncBody
+  Match(Lexeme::Type::kKeywordFunction);
+  nodes_.emplace_back(FuncExpr{ParseFuncBody()});
+  return std::get<FuncExpr>(nodes_.back());
 }
 
 bool Parser::is_block_follow() const noexcept {
