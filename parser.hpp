@@ -48,6 +48,9 @@ struct Index;
 struct FuncStat;
 struct FuncName;
 struct RetStat;
+struct LocalStat;
+struct LocalFunc;
+struct FuncBody;
 
 struct Nil {};
 struct Vararg {};
@@ -75,7 +78,9 @@ struct Statement {
                std::reference_wrapper<const ExprStat>,
                std::reference_wrapper<const ForStat>,
                std::reference_wrapper<const FuncStat>,
-               std::reference_wrapper<const RetStat>>
+               std::reference_wrapper<const RetStat>,
+               std::reference_wrapper<const LocalStat>,
+               std::reference_wrapper<const LocalFunc>>
       stat;
 };
 
@@ -205,8 +210,7 @@ struct Index {
 
 struct FuncStat {
   const FuncName& name;
-  std::vector<Symbol> params;
-  const StatList& body;
+  const FuncBody& body;
 };
 
 struct FuncName {
@@ -217,11 +221,26 @@ struct RetStat {
   std::optional<std::reference_wrapper<const Expr>> expr;
 };
 
-using Node =
-    std::variant<Nil, StatList, Statement, IfStat, TestThenBlock, Expr,
-                 SimpleExpr, Unop, Binop, SuffixedExp, PrimaryExp, ExprStat,
-                 Assignment, FuncCall, ExpList, ForStat, Constructor, Field,
-                 Index, FuncStat, FuncName, RetStat>;
+struct LocalStat {
+  Symbol name;
+  const Expr& expr;
+};
+
+struct LocalFunc {
+  Symbol name;
+  const FuncBody& body;
+};
+
+struct FuncBody {
+  std::vector<Symbol> params;
+  const StatList& body;
+};
+
+using Node = std::variant<Nil, StatList, Statement, IfStat, TestThenBlock, Expr,
+                          SimpleExpr, Unop, Binop, SuffixedExp, PrimaryExp,
+                          ExprStat, Assignment, FuncCall, ExpList, ForStat,
+                          Constructor, Field, Index, FuncStat, FuncName,
+                          RetStat, LocalStat, LocalFunc, FuncBody>;
 }  // namespace node
 
 class Parser {
@@ -289,6 +308,9 @@ class Parser {
   node::FuncStat& ParseFuncStat();
   node::FuncName& ParseFuncName();
   node::RetStat& ParseRetStat();
+  node::LocalStat& ParseLocalStat();
+  node::LocalFunc& ParseLocalFunc();
+  node::FuncBody& ParseFuncBody();
   bool is_block_follow() const noexcept;
   bool is_unop() const noexcept;
   node::Unop::Type unop_type() const noexcept;

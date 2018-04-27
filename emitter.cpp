@@ -101,6 +101,7 @@ using node::Expr;
 using node::ExprStat;
 using node::Field;
 using node::ForStat;
+using node::FuncBody;
 using node::FuncCall;
 using node::FuncName;
 using node::FuncStat;
@@ -108,6 +109,8 @@ using node::IfStat;
 using node::Index;
 using node::LiteralFloat;
 using node::LiteralInt;
+using node::LocalFunc;
+using node::LocalStat;
 using node::Nil;
 using node::PrimaryExp;
 using node::RetStat;
@@ -157,6 +160,10 @@ class IrEmitter {
   void Emit(const ForStat&);
   void Emit(const FuncStat&);
   void Emit(const RetStat&);
+  void Emit(const LocalStat&);
+  void Emit(const LocalFunc&);
+  void Emit(const FuncBody&, Function*);
+  void EmitAssignment(Value* addr, Value* value);
   Value* Eval(const Expr&);
   Value* Eval(const SimpleExpr&);
   Value* Eval(const Unop&);
@@ -174,6 +181,7 @@ class IrEmitter {
   Value* Addr(const SuffixedExp&, bool is_local);
   Value* Addr(const PrimaryExp&, bool is_local);
   Value* Addr(const Index&);
+  Value* Addr(Symbol, bool is_local);
   Value* ToBool(Value*);
   Value* LookupSymbol(const string&, bool is_local);
   Value* ExtractType(Value*);
@@ -486,7 +494,7 @@ Value* IrEmitter::Eval(const SuffixedExp& expr) {
 Value* IrEmitter::Eval(const PrimaryExp& expr) {
   return visit(
       Overloaded{[this](const Symbol& symbol) -> Value* {
-                   Value* addr = LookupSymbol(symbols_[symbol.name], false);
+                   Value* addr = Addr(symbol, false);
                    return builder_.CreateLoad(value_type_, addr);
                  },
                  [this](const auto& ref) -> Value* { return Eval(ref.get()); }},
@@ -593,6 +601,10 @@ Value* IrEmitter::Eval(const FuncCall& func_call) {
 void IrEmitter::Emit(const Assignment& assignment) {
   Value* value = Eval(assignment.rhs);
   Value* addr = Addr(assignment.lhs, false);
+  EmitAssignment(addr, value);
+}
+
+void IrEmitter::EmitAssignment(Value* addr, Value* value) {
   Value* tag_table = builder_.getInt64(kSluaValueTable);
 
   BasicBlock* then_block = CreateBlock("assign_lhs_then");
@@ -639,7 +651,11 @@ Value* IrEmitter::Addr(const SuffixedExp& expr, bool is_local) {
 }
 
 Value* IrEmitter::Addr(const PrimaryExp& expr, bool is_local) {
-  return LookupSymbol(symbols_[get<Symbol>(expr.expr).name], is_local);
+  return Addr(get<Symbol>(expr.expr), is_local);
+}
+
+Value* IrEmitter::Addr(Symbol name, bool is_local) {
+  return LookupSymbol(symbols_[name.name], is_local);
 }
 
 Value* IrEmitter::ToBool(Value* value) {
@@ -725,7 +741,7 @@ void IrEmitter::EmitDestroyScope(SymbolTable& symbol_table) {
 
 void IrEmitter::Emit(const ForStat& for_stat) {
   EnterScope();
-  Value* count = LookupSymbol(symbols_[for_stat.symbol.name], true);
+  Value* count = Addr(for_stat.symbol, true);
   Value* init = Eval(for_stat.initial);
   Value* limit = Eval(for_stat.limit);
   Value* step = Eval(for_stat.step);
@@ -1207,39 +1223,14 @@ void IrEmitter::Emit(const FuncStat& func_stat) {
   Function* func =
       Function::Create(FunctionType::get(value_type_, {value_type_}, false),
                        Function::ExternalLinkage, "", module_);
-  Value* ptr = LookupSymbol(symbols_[func_stat.name.name.name], false);
-  Value* type_ptr = PointerToType(ptr);
-  Value* value_ptr = PointerToValue(ptr);
-  builder_.CreateStore(builder_.getInt64(kSluaValueFunction), type_ptr);
+  Value* ptr = Addr(func_stat.name.name, false);
+  builder_.CreateStore(builder_.getInt64(kSluaValueFunction),
+                       PointerToType(ptr));
   builder_.CreateStore(builder_.CreateBitCast(func, builder_.getInt64Ty()),
-                       value_ptr);
+                       PointerToValue(ptr));
   functions_.push_back(func);
 
-  BasicBlock* entry_block =
-      BasicBlock::Create(builder_.getContext(), "entry", func);
-  BasicBlock* outer_block = builder_.GetInsertBlock();
-  builder_.SetInsertPoint(entry_block);
-
-  Function* outer_func = curr_func_;
-  curr_func_ = func;
-  EnterScope();
-  for (index i = 0; i < static_cast<index>(func_stat.params.size()); ++i) {
-    const string& name = symbols_[func_stat.params[i].name];
-    Value* ptr = LookupSymbol(name, true);
-    Value* index = ConstantStruct::get(
-        value_type_,
-        {builder_.getInt64(kSluaValueInteger), builder_.getInt64(i + 1)});
-    Value* source_ptr =
-        builder_.CreateCall(func_table_access_, {func->arg_begin(), index});
-    builder_.CreateStore(builder_.CreateLoad(source_ptr), ptr);
-  }
-  Emit(func_stat.body);
-  LeaveScope();
-  builder_.CreateRet(ConstantStruct::get(
-      value_type_, {builder_.getInt64(kSluaValueNil), builder_.getInt64(0)}));
-  curr_func_ = outer_func;
-
-  builder_.SetInsertPoint(outer_block);
+  Emit(func_stat.body, func);
 }
 
 void IrEmitter::Emit(const RetStat& ret_stat) {
@@ -1279,6 +1270,53 @@ Value* IrEmitter::EvalLogic(Value* lhs, Value* rhs, LogicOp op) {
   builder_.CreateStore(builder_.CreateZExt(result_value, builder_.getInt64Ty()),
                        PointerToValue(result_ptr));
   return builder_.CreateLoad(result_ptr);
+}
+
+void IrEmitter::Emit(const FuncBody& body, Function* func) {
+  BasicBlock* entry_block =
+      BasicBlock::Create(builder_.getContext(), "entry", func);
+  BasicBlock* outer_block = builder_.GetInsertBlock();
+  builder_.SetInsertPoint(entry_block);
+
+  Function* outer_func = curr_func_;
+  curr_func_ = func;
+  EnterScope();
+  for (index i = 0; i < static_cast<index>(body.params.size()); ++i) {
+    Value* ptr = Addr(body.params[i], true);
+    Value* index = ConstantStruct::get(
+        value_type_,
+        {builder_.getInt64(kSluaValueInteger), builder_.getInt64(i + 1)});
+    Value* source_ptr =
+        builder_.CreateCall(func_table_access_, {func->arg_begin(), index});
+    builder_.CreateStore(builder_.CreateLoad(source_ptr), ptr);
+  }
+  Emit(body.body);
+  LeaveScope();
+  builder_.CreateRet(ConstantStruct::get(
+      value_type_, {builder_.getInt64(kSluaValueNil), builder_.getInt64(0)}));
+  curr_func_ = outer_func;
+
+  builder_.SetInsertPoint(outer_block);
+}
+
+void IrEmitter::Emit(const LocalStat& stat) {
+  Value* addr = Addr(stat.name, true);
+  Value* value = Eval(stat.expr);
+  EmitAssignment(addr, value);
+}
+
+void IrEmitter::Emit(const LocalFunc& local_func) {
+  Function* func =
+      Function::Create(FunctionType::get(value_type_, {value_type_}, false),
+                       Function::ExternalLinkage, "", module_);
+  Value* ptr = Addr(local_func.name, true);
+  builder_.CreateStore(builder_.getInt64(kSluaValueFunction),
+                       PointerToType(ptr));
+  builder_.CreateStore(builder_.CreateBitCast(func, builder_.getInt64Ty()),
+                       PointerToValue(ptr));
+  functions_.push_back(func);
+
+  Emit(local_func.body, func);
 }
 }  // namespace
 

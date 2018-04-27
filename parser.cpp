@@ -57,6 +57,7 @@ using node::Expr;
 using node::ExprStat;
 using node::Field;
 using node::ForStat;
+using node::FuncBody;
 using node::FuncCall;
 using node::FuncName;
 using node::FuncStat;
@@ -64,6 +65,8 @@ using node::IfStat;
 using node::Index;
 using node::LiteralFloat;
 using node::LiteralInt;
+using node::LocalFunc;
+using node::LocalStat;
 using node::Nil;
 using node::PrimaryExp;
 using node::RetStat;
@@ -182,7 +185,8 @@ StatList& Parser::ParseStatList() {
 }
 
 Statement& Parser::ParseStatement() {
-  // Statement -> ';' | IfStat | ExprStat | FuncStat
+  // Statement -> ';' | IfStat | ForStat | FuncStat | RetStat | LocalStat |
+  //              LocalFunc | ExprStat
   nodes_.emplace_back(Statement{});
   Statement& statement = std::get<Statement>(nodes_.back());
   switch (current().type) {
@@ -200,6 +204,13 @@ Statement& Parser::ParseStatement() {
       break;
     case Lexeme::Type::kKeywordReturn:
       statement.stat = ParseRetStat();
+      break;
+    case Lexeme::Type::kKeywordLocal:
+      if (lookahead().type == Lexeme::Type::kKeywordFunction) {
+        statement.stat = ParseLocalFunc();
+      } else {
+        statement.stat = ParseLocalStat();
+      }
       break;
     default:
       statement.stat = ParseExprStat();
@@ -390,27 +401,10 @@ Index& Parser::ParseIndex(SuffixedExp& lhs) {
 }
 
 FuncStat& Parser::ParseFuncStat() {
-  // FuncStat -> function FuncName '(' [ symbol { ',' symbol } ] ')' StatList
-  //             end
+  // FuncStat -> function FuncName FuncBody
   Match(Lexeme::Type::kKeywordFunction);
   FuncName& name = ParseFuncName();
-  Match(Lexeme::Type::kLeftBracket);
-  std::vector<Symbol> params;
-  while (current().type != Lexeme::Type::kRightBracket) {
-    if (current().type == Lexeme::Type::kSymbol) {
-      params.emplace_back(Symbol{current().data.symbol_name});
-    } else {
-      SyntaxError();
-    }
-    Next();
-    if (current().type == Lexeme::Type::kComma) {
-      Next();
-    }
-  }
-  Match(Lexeme::Type::kRightBracket);
-  StatList& body = ParseStatList();
-  Match(Lexeme::Type::kKeywordEnd);
-  nodes_.emplace_back(FuncStat{name, std::move(params), body});
+  nodes_.emplace_back(FuncStat{name, ParseFuncBody()});
   return std::get<FuncStat>(nodes_.back());
 }
 
@@ -437,6 +431,56 @@ RetStat& Parser::ParseRetStat() {
   }
   ret.expr = ParseExpr();
   return ret;
+}
+
+LocalStat& Parser::ParseLocalStat() {
+  // LocalStat -> local symbol '=' Expr
+  Match(Lexeme::Type::kKeywordLocal);
+  if (current().type != Lexeme::Type::kSymbol) {
+    SyntaxError();
+  }
+  Symbol name{current().data.symbol_name};
+  Next();
+  Match(Lexeme::Type::kAssignment);
+  Expr& expr = ParseExpr();
+  nodes_.emplace_back(LocalStat{name, expr});
+  return std::get<LocalStat>(nodes_.back());
+}
+
+LocalFunc& Parser::ParseLocalFunc() {
+  // LocalFunc -> local function symbol FuncBody
+  Match(Lexeme::Type::kKeywordLocal);
+  Match(Lexeme::Type::kKeywordFunction);
+  if (current().type != Lexeme::Type::kSymbol) {
+    SyntaxError();
+  }
+  Symbol name{current().data.symbol_name};
+  Next();
+  FuncBody& body = ParseFuncBody();
+  nodes_.emplace_back(LocalFunc{name, body});
+  return std::get<LocalFunc>(nodes_.back());
+}
+
+FuncBody& Parser::ParseFuncBody() {
+  // FuncBody -> '(' [ symbol { ',' symbol } ] ')' StatList end
+  Match(Lexeme::Type::kLeftBracket);
+  std::vector<Symbol> params;
+  while (current().type != Lexeme::Type::kRightBracket) {
+    if (current().type == Lexeme::Type::kSymbol) {
+      params.emplace_back(Symbol{current().data.symbol_name});
+    } else {
+      SyntaxError();
+    }
+    Next();
+    if (current().type == Lexeme::Type::kComma) {
+      Next();
+    }
+  }
+  Match(Lexeme::Type::kRightBracket);
+  StatList& body = ParseStatList();
+  Match(Lexeme::Type::kKeywordEnd);
+  nodes_.emplace_back(FuncBody{std::move(params), body});
+  return std::get<FuncBody>(nodes_.back());
 }
 
 bool Parser::is_block_follow() const noexcept {
