@@ -11,42 +11,17 @@
 #include "util.hpp"
 
 namespace slua {
-namespace node {
-ExpType SuffixedExp::type() const noexcept {
-  return std::visit(
-      [](const auto& ref) {
-        using T = std::decay_t<decltype(ref.get())>;
-        if constexpr (std::is_same_v<T, PrimaryExp>) {
-          return ref.get().type();
-        } else if constexpr (std::is_same_v<T, FuncCall>) {
-          return ExpType::kRight;
-        } else if constexpr (std::is_same_v<T, Index>) {
-          return ExpType::kLeft;
-        } else {
-          static_assert(FalseType<T>::value);
-        }
-      },
-      expr);
-}
-
-ExpType PrimaryExp::type() const noexcept {
-  return std::visit(
-      [](const auto& ref) {
-        using T = std::decay_t<decltype(ref)>;
-        if constexpr (std::is_same_v<T, Symbol>) {
-          return ExpType::kLeft;
-        } else {
-          using U = std::decay_t<decltype(ref.get())>;
-          if constexpr (std::is_same_v<U, Expr>) {
-            return ExpType::kRight;
-          } else {
-            static_assert(FalseType<U>::value);
-          }
-        }
-      },
-      expr);
-}
-}  // namespace node
+namespace {
+using std::array;
+using std::decay_t;
+using std::get;
+using std::is_same_v;
+using std::move;
+using std::optional;
+using std::reference_wrapper;
+using std::runtime_error;
+using std::vector;
+using std::visit;
 
 using node::Assignment;
 using node::Binop;
@@ -78,6 +53,44 @@ using node::SuffixedExp;
 using node::Symbol;
 using node::TestThenBlock;
 using node::Unop;
+}  // namespace
+
+namespace node {
+ExpType SuffixedExp::type() const noexcept {
+  return visit(
+      [](const auto& ref) {
+        using T = decay_t<decltype(ref.get())>;
+        if constexpr (is_same_v<T, PrimaryExp>) {
+          return ref.get().type();
+        } else if constexpr (is_same_v<T, FuncCall>) {
+          return ExpType::kRight;
+        } else if constexpr (is_same_v<T, Index>) {
+          return ExpType::kLeft;
+        } else {
+          static_assert(FalseType<T>::value);
+        }
+      },
+      expr);
+}
+
+ExpType PrimaryExp::type() const noexcept {
+  return visit(
+      [](const auto& ref) {
+        using T = decay_t<decltype(ref)>;
+        if constexpr (is_same_v<T, Symbol>) {
+          return ExpType::kLeft;
+        } else {
+          using U = decay_t<decltype(ref.get())>;
+          if constexpr (is_same_v<U, Expr>) {
+            return ExpType::kRight;
+          } else {
+            static_assert(FalseType<U>::value);
+          }
+        }
+      },
+      expr);
+}
+}  // namespace node
 
 namespace {
 struct BinPriority {
@@ -85,7 +98,7 @@ struct BinPriority {
   int right;
 };
 
-using Priority = std::array<BinPriority, Binop::kSize>;
+using Priority = array<BinPriority, Binop::kSize>;
 
 constexpr Priority BuildPriorityMap() {
   Priority priority{};
@@ -117,7 +130,7 @@ constexpr Priority kPriority = BuildPriorityMap();
 constexpr int kPriorityUnary = 12;
 }  // namespace
 
-Parser::Parser(const std::vector<Lexeme>& lexemes)
+Parser::Parser(const vector<Lexeme>& lexemes)
     : lexemes_(lexemes), root_(ParseStatList()) {}
 
 SimpleExpr& Parser::ParseSimpleExpr() {
@@ -145,7 +158,7 @@ SimpleExpr& Parser::ParseSimpleExpr() {
       nodes_.emplace_back(SimpleExpr{ParseSuffixedExp()});
       break;
   }
-  return std::get<SimpleExpr>(nodes_.back());
+  return get<SimpleExpr>(nodes_.back());
 }
 
 Expr& Parser::ParseSubExpr(int priority) {
@@ -156,11 +169,11 @@ Expr& Parser::ParseSubExpr(int priority) {
     Next();
     Expr& expr = ParseSubExpr(kPriorityUnary);
     nodes_.emplace_back(Unop{op, expr});
-    nodes_.emplace_back(Expr{std::get<Unop>(nodes_.back())});
-    lhs = &std::get<Expr>(nodes_.back());
+    nodes_.emplace_back(Expr{get<Unop>(nodes_.back())});
+    lhs = &get<Expr>(nodes_.back());
   } else {
     nodes_.emplace_back(Expr{ParseSimpleExpr()});
-    lhs = &std::get<Expr>(nodes_.back());
+    lhs = &get<Expr>(nodes_.back());
   }
   while (is_binop()) {
     Binop::Type op = binop_type();
@@ -170,10 +183,10 @@ Expr& Parser::ParseSubExpr(int priority) {
     Next();
     Expr& rhs = ParseSubExpr(kPriority[op].right);
     nodes_.emplace_back(Binop{op, *lhs, rhs});
-    nodes_.emplace_back(Expr{std::get<Binop>(nodes_.back())});
-    lhs = &std::get<Expr>(nodes_.back());
+    nodes_.emplace_back(Expr{get<Binop>(nodes_.back())});
+    lhs = &get<Expr>(nodes_.back());
   }
-  return std::get<Expr>(nodes_.back());
+  return get<Expr>(nodes_.back());
 }
 
 Expr& Parser::ParseExpr() { return ParseSubExpr(0); }
@@ -181,7 +194,7 @@ Expr& Parser::ParseExpr() { return ParseSubExpr(0); }
 StatList& Parser::ParseStatList() {
   // StatList -> { Statement }
   nodes_.emplace_back(StatList{});
-  StatList& stat_list = std::get<StatList>(nodes_.back());
+  StatList& stat_list = get<StatList>(nodes_.back());
   while (!is_block_follow()) {
     stat_list.stats.emplace_back(ParseStatement());
   }
@@ -192,7 +205,7 @@ Statement& Parser::ParseStatement() {
   // Statement -> ';' | IfStat | ForStat | FuncStat | RetStat | LocalStat |
   //              LocalFunc | ExprStat
   nodes_.emplace_back(Statement{});
-  Statement& statement = std::get<Statement>(nodes_.back());
+  Statement& statement = get<Statement>(nodes_.back());
   switch (current().type) {
     case Lexeme::Type::kSemicolon:
       Next();
@@ -227,7 +240,7 @@ IfStat& Parser::ParseIfStat() {
   // IfStat -> if TestThenBlock { elseif TestThenBlock } [ else Block ] end
   Match(Lexeme::Type::kKeywordIf);
   nodes_.emplace_back(IfStat{});
-  IfStat& if_stat = std::get<IfStat>(nodes_.back());
+  IfStat& if_stat = get<IfStat>(nodes_.back());
   if_stat.cond_blocks.emplace_back(ParseTestThenBlock());
   while (current().type == Lexeme::Type::kKeywordElseif) {
     Next();
@@ -247,7 +260,7 @@ TestThenBlock& Parser::ParseTestThenBlock() {
   Match(Lexeme::Type::kKeywordThen);
   StatList& then = ParseStatList();
   nodes_.emplace_back(TestThenBlock{cond, then});
-  return std::get<TestThenBlock>(nodes_.back());
+  return get<TestThenBlock>(nodes_.back());
 }
 
 SuffixedExp& Parser::ParseSuffixedExp() {
@@ -257,14 +270,14 @@ SuffixedExp& Parser::ParseSuffixedExp() {
     switch (current().type) {
       case Lexeme::Type::kLeftSquareBracket:
         nodes_.emplace_back(
-            SuffixedExp{ParseIndex(std::get<SuffixedExp>(nodes_.back()))});
+            SuffixedExp{ParseIndex(get<SuffixedExp>(nodes_.back()))});
         break;
       case Lexeme::Type::kLeftBracket:
         nodes_.emplace_back(
-            SuffixedExp{ParseFuncCall(std::get<SuffixedExp>(nodes_.back()))});
+            SuffixedExp{ParseFuncCall(get<SuffixedExp>(nodes_.back()))});
         break;
       default:
-        return std::get<SuffixedExp>(nodes_.back());
+        return get<SuffixedExp>(nodes_.back());
     }
   }
 }
@@ -284,7 +297,7 @@ PrimaryExp& Parser::ParsePrimaryExp() {
     default:
       SyntaxError();
   }
-  return std::get<PrimaryExp>(nodes_.back());
+  return get<PrimaryExp>(nodes_.back());
 }
 
 ExprStat& Parser::ParseExprStat() {
@@ -298,7 +311,7 @@ ExprStat& Parser::ParseExprStat() {
   } else {
     nodes_.emplace_back(ExprStat{lhs});
   }
-  return std::get<ExprStat>(nodes_.back());
+  return get<ExprStat>(nodes_.back());
 }
 
 Assignment& Parser::ParseAssignment(SuffixedExp& lhs) {
@@ -306,25 +319,25 @@ Assignment& Parser::ParseAssignment(SuffixedExp& lhs) {
   Match(Lexeme::Type::kAssignment);
   Expr& rhs = ParseExpr();
   nodes_.emplace_back(Assignment{lhs, rhs});
-  return std::get<Assignment>(nodes_.back());
+  return get<Assignment>(nodes_.back());
 }
 
 FuncCall& Parser::ParseFuncCall(SuffixedExp& func) {
   // FuncCall -> SuffixedExp '(' [ ExpList ] ')'
   Match(Lexeme::Type::kLeftBracket);
-  std::optional<std::reference_wrapper<const ExpList>> args;
+  optional<reference_wrapper<const ExpList>> args;
   if (current().type != Lexeme::Type::kRightBracket) {
     args = ParseExpList();
   }
   Match(Lexeme::Type::kRightBracket);
   nodes_.emplace_back(FuncCall{func, args});
-  return std::get<FuncCall>(nodes_.back());
+  return get<FuncCall>(nodes_.back());
 }
 
 ExpList& Parser::ParseExpList() {
   // ExpList -> Expr { ',' Expr }
   nodes_.emplace_back(ExpList{});
-  ExpList& exp_list = std::get<ExpList>(nodes_.back());
+  ExpList& exp_list = get<ExpList>(nodes_.back());
   exp_list.exps.emplace_back(ParseExpr());
   while (current().type == Lexeme::Type::kComma) {
     Next();
@@ -351,14 +364,14 @@ ForStat& Parser::ParseForStat() {
     step = &ParseExpr();
   } else {
     nodes_.emplace_back(SimpleExpr{LiteralInt{1}});
-    nodes_.emplace_back(Expr{std::get<SimpleExpr>(nodes_.back())});
-    step = &std::get<Expr>(nodes_.back());
+    nodes_.emplace_back(Expr{get<SimpleExpr>(nodes_.back())});
+    step = &get<Expr>(nodes_.back());
   }
   Match(Lexeme::Type::kKeywordDo);
   StatList& body = ParseStatList();
   Match(Lexeme::Type::kKeywordEnd);
   nodes_.emplace_back(ForStat{symbol, init, limit, *step, body});
-  return std::get<ForStat>(nodes_.back());
+  return get<ForStat>(nodes_.back());
 }
 
 Constructor& Parser::ParseConstructor() {
@@ -366,7 +379,7 @@ Constructor& Parser::ParseConstructor() {
   // Sep -> ',' | ';'
   Match(Lexeme::Type::kLeftBrace);
   nodes_.emplace_back(Constructor{});
-  Constructor& constructor = std::get<Constructor>(nodes_.back());
+  Constructor& constructor = get<Constructor>(nodes_.back());
   while (current().type != Lexeme::Type::kRightBrace) {
     constructor.fields.emplace_back(ParseField());
     if (current().type != Lexeme::Type::kComma &&
@@ -386,14 +399,14 @@ Field& Parser::ParseField() {
       if (lookahead().type != Lexeme::Type::kAssignment) {
         nodes_.emplace_back(Field{ParseExpr()});
       } else {
-        throw std::runtime_error{"Not implemented"};
+        throw runtime_error{"Not implemented"};
       }
       break;
     default:
       nodes_.emplace_back(Field{ParseExpr()});
       break;
   }
-  return std::get<Field>(nodes_.back());
+  return get<Field>(nodes_.back());
 }
 
 Index& Parser::ParseIndex(SuffixedExp& lhs) {
@@ -401,7 +414,7 @@ Index& Parser::ParseIndex(SuffixedExp& lhs) {
   Match(Lexeme::Type::kLeftSquareBracket);
   nodes_.emplace_back(Index{lhs, ParseExpr()});
   Match(Lexeme::Type::kRightSquareBracket);
-  return std::get<Index>(nodes_.back());
+  return get<Index>(nodes_.back());
 }
 
 FuncStat& Parser::ParseFuncStat() {
@@ -409,7 +422,7 @@ FuncStat& Parser::ParseFuncStat() {
   Match(Lexeme::Type::kKeywordFunction);
   FuncName& name = ParseFuncName();
   nodes_.emplace_back(FuncStat{name, ParseFuncBody()});
-  return std::get<FuncStat>(nodes_.back());
+  return get<FuncStat>(nodes_.back());
 }
 
 FuncName& Parser::ParseFuncName() {
@@ -417,7 +430,7 @@ FuncName& Parser::ParseFuncName() {
   if (current().type == Lexeme::Type::kSymbol) {
     nodes_.emplace_back(FuncName{Symbol{current().data.symbol_name}});
     Next();
-    return std::get<FuncName>(nodes_.back());
+    return get<FuncName>(nodes_.back());
   }
   SyntaxError();
 }
@@ -426,7 +439,7 @@ RetStat& Parser::ParseRetStat() {
   // RetStat -> return [ expr ] [ ';' ]
   Match(Lexeme::Type::kKeywordReturn);
   nodes_.emplace_back(RetStat{});
-  RetStat& ret = std::get<RetStat>(nodes_.back());
+  RetStat& ret = get<RetStat>(nodes_.back());
   if (is_block_follow() || current().type == Lexeme::Type::kSemicolon) {
     if (current().type == Lexeme::Type::kSemicolon) {
       Next();
@@ -448,7 +461,7 @@ LocalStat& Parser::ParseLocalStat() {
   Match(Lexeme::Type::kAssignment);
   Expr& expr = ParseExpr();
   nodes_.emplace_back(LocalStat{name, expr});
-  return std::get<LocalStat>(nodes_.back());
+  return get<LocalStat>(nodes_.back());
 }
 
 LocalFunc& Parser::ParseLocalFunc() {
@@ -462,13 +475,13 @@ LocalFunc& Parser::ParseLocalFunc() {
   Next();
   FuncBody& body = ParseFuncBody();
   nodes_.emplace_back(LocalFunc{name, body});
-  return std::get<LocalFunc>(nodes_.back());
+  return get<LocalFunc>(nodes_.back());
 }
 
 FuncBody& Parser::ParseFuncBody() {
   // FuncBody -> '(' [ symbol { ',' symbol } ] ')' StatList end
   Match(Lexeme::Type::kLeftBracket);
-  std::vector<Symbol> params;
+  vector<Symbol> params;
   while (current().type != Lexeme::Type::kRightBracket) {
     if (current().type == Lexeme::Type::kSymbol) {
       params.emplace_back(Symbol{current().data.symbol_name});
@@ -483,15 +496,15 @@ FuncBody& Parser::ParseFuncBody() {
   Match(Lexeme::Type::kRightBracket);
   StatList& body = ParseStatList();
   Match(Lexeme::Type::kKeywordEnd);
-  nodes_.emplace_back(FuncBody{std::move(params), body});
-  return std::get<FuncBody>(nodes_.back());
+  nodes_.emplace_back(FuncBody{move(params), body});
+  return get<FuncBody>(nodes_.back());
 }
 
 FuncExpr& Parser::ParseFuncExpr() {
   // FuncExpr -> function FuncBody
   Match(Lexeme::Type::kKeywordFunction);
   nodes_.emplace_back(FuncExpr{ParseFuncBody()});
-  return std::get<FuncExpr>(nodes_.back());
+  return get<FuncExpr>(nodes_.back());
 }
 
 bool Parser::is_block_follow() const noexcept {
