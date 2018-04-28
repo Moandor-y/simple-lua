@@ -16,12 +16,13 @@ A compiler which compiles (a subset of) lua to machine code.
 - [x] Function
 - [x] Local variable
 - [x] Table array part
-- [ ] Table hash part
+- [x] Table hash part
 - [x] Table indexing
 - [ ] Table field access
 - [x] Integer literal
 - [x] Floating point literal
-- [ ] String literal
+- [x] String literal
+- [ ] String GC
 - [ ] Function closure
 - [ ] Operator overloading
 
