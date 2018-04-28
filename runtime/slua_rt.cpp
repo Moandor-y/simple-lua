@@ -1,5 +1,7 @@
 #include <cstdarg>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 #include <algorithm>
 #include <exception>
@@ -21,7 +23,10 @@ using std::cerr;
 using std::copy;
 using std::cout;
 using std::function;
+using std::int64_t;
 using std::list;
+using std::size_t;
+using std::strcmp;
 using std::string;
 using std::terminate;
 using std::unordered_map;
@@ -30,12 +35,46 @@ using std::vector;
 using gsl::make_span;
 using gsl::span;
 
+using TableHash = unordered_map<SluaValue, SluaValue>;
+
 unordered_map<string, function<SluaValue(vector<SluaValue>&)>>
     builtin_functions;
 
 list<SluaTable> tables;
 unordered_map<SluaTable*, list<SluaTable>::iterator> table_iters;
+
+[[noreturn]] void slua_runtime_error(const char* message) noexcept {
+  cerr << message << '\n';
+  terminate();
+}
 }  // namespace
+
+namespace std {
+template <>
+struct hash<SluaValue> {
+  using argument_type = SluaValue;
+  using result_type = size_t;
+
+  result_type operator()(const argument_type& value) const noexcept {
+    switch (value.type) {
+      case kSluaValueBool:
+        return hash<int>{}(value.value.bool_val);
+      case kSluaValueInteger:
+        return hash<int64_t>{}(value.value.int_val);
+      case kSluaValueFloat:
+        return hash<double>{}(value.value.float_val);
+      case kSluaValueString:
+        return hash<string>{}(value.value.str_val);
+      case kSluaValueTable:
+      case kSluaValueFunction:
+      case kSluaValueBuiltinFunction:
+        return hash<void*>{}(value.value.address);
+      default:
+        slua_runtime_error("Cannot hash value");
+    }
+  }
+};
+}  // namespace std
 
 extern "C" {
 void slua_main();
@@ -71,11 +110,6 @@ SluaValue slua_print(vector<SluaValue>& args) noexcept {
   }
   cout << '\n';
   return SluaValue{kSluaValueNil, {0}};
-}
-
-[[noreturn]] void slua_runtime_error(const char* message) noexcept {
-  cerr << message << '\n';
-  terminate();
 }
 
 SluaValue slua_invoke_builtin(const char* name, int count, ...) noexcept {
@@ -153,6 +187,7 @@ SluaTable* slua_table_new() noexcept {
   ptr->array_ptr = new SluaValue[2]{};
   ptr->array_capacity = 2;
   ptr->array_size = 1;
+  ptr->hash_ptr = new TableHash{};
 #ifndef NDEBUG
   cout << "Table allocated: " << ptr << '\n';
 #endif
@@ -182,7 +217,15 @@ void slua_table_ref_dec(SluaTable* table) noexcept {
         slua_table_ref_dec(static_cast<SluaTable*>(value.value.address));
       }
     }
+    TableHash& table_hash = *static_cast<TableHash*>(table->hash_ptr);
+    for (auto& elem : table_hash) {
+      SluaValue& value = elem.second;
+      if (value.type == kSluaValueTable) {
+        slua_table_ref_dec(static_cast<SluaTable*>(value.value.address));
+      }
+    }
     delete[] table->array_ptr;
+    delete &table_hash;
     auto iter = table_iters.find(table);
     tables.erase(iter->second);
     table_iters.erase(iter);
@@ -206,9 +249,10 @@ void slua_table_array_grow(SluaTable* table) noexcept {
 }
 
 SluaValue* slua_table_access(SluaValue lhs, SluaValue rhs) noexcept {
-  if (lhs.type != kSluaValueTable || rhs.type != kSluaValueInteger) {
+  if (lhs.type != kSluaValueTable || rhs.type == kSluaValueNil) {
     slua_runtime_error("Error: cannot perform table access");
   }
+
   using gsl::index;
   index i = rhs.value.int_val;
   SluaTable* table = static_cast<SluaTable*>(lhs.value.address);
@@ -222,8 +266,34 @@ SluaValue* slua_table_access(SluaValue lhs, SluaValue rhs) noexcept {
     }
     return &table->array_ptr[i];
   }
-  slua_runtime_error("Hash access not implemented");
+
+  TableHash& table_hash = *static_cast<TableHash*>(table->hash_ptr);
+  return &table_hash[rhs];
 }
+}  // extern "C"
+
+bool operator==(const SluaValue& lhs, const SluaValue& rhs) noexcept {
+  if (lhs.type != rhs.type) {
+    return false;
+  }
+  switch (lhs.type) {
+    case kSluaValueNil:
+      return true;
+    case kSluaValueBool:
+      return lhs.value.bool_val == rhs.value.bool_val;
+    case kSluaValueInteger:
+      return lhs.value.int_val == rhs.value.int_val;
+    case kSluaValueFloat:
+      return lhs.value.float_val == rhs.value.float_val;
+    case kSluaValueString:
+      return strcmp(lhs.value.str_val, rhs.value.str_val) == 0;
+    case kSluaValueTable:
+    case kSluaValueFunction:
+    case kSluaValueBuiltinFunction:
+      return lhs.value.address == rhs.value.address;
+    default:
+      slua_runtime_error("Cannot compare values");
+  }
 }
 
 int main() {
