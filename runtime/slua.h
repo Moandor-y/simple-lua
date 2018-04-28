@@ -8,6 +8,7 @@ enum SluaValueType : int64_t {
   kSluaValueBool,
   kSluaValueInteger,
   kSluaValueFloat,
+  kSluaValueString,
   kSluaValueTable,
   kSluaValueFunction,
   kSluaValueBuiltinFunction,
@@ -19,6 +20,7 @@ struct SluaValue {
     int64_t int_val;
     double float_val;
     int bool_val;
+    const char* str_val;
     void* address;
   } value;
 };

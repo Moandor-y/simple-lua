@@ -63,6 +63,10 @@ struct LiteralFloat {
   double value;
 };
 
+struct LiteralString {
+  gsl::index value;
+};
+
 struct Symbol {
   gsl::index name;
 };
@@ -103,7 +107,7 @@ struct Expr {
 };
 
 struct SimpleExpr {
-  std::variant<Nil, LiteralInt, LiteralFloat,
+  std::variant<Nil, LiteralInt, LiteralFloat, LiteralString,
                std::reference_wrapper<const SuffixedExp>,
                std::reference_wrapper<const Constructor>,
                std::reference_wrapper<const FuncExpr>>

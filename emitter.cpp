@@ -111,6 +111,7 @@ using node::IfStat;
 using node::Index;
 using node::LiteralFloat;
 using node::LiteralInt;
+using node::LiteralString;
 using node::LocalFunc;
 using node::LocalStat;
 using node::Nil;
@@ -152,7 +153,7 @@ enum class LogicOp {
 class IrEmitter {
  public:
   IrEmitter(IRBuilder<>&, Module*, const vector<string>& symbols,
-            Function* main_func);
+            const vector<string>& str_literals, Function* main_func);
 
   void Emit(const StatList&);
   void Emit(const Statement&);
@@ -239,6 +240,7 @@ class IrEmitter {
   Function* func_floor_;  // double f(double)
 
   const vector<string>& symbols_;
+  const vector<string>& str_literals_;
   unique_ptr<SymbolTable> symbol_table_;
 
   vector<Function*> functions_;
@@ -253,7 +255,8 @@ class IrEmitter {
 };
 
 IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
-                     const vector<string>& symbols, Function* main_func)
+                     const vector<string>& symbols,
+                     const vector<string>& str_literals, Function* main_func)
     : builder_{builder},
       module_{module},
       value_type_{StructType::create(
@@ -354,6 +357,8 @@ IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
                            Function::ExternalLinkage, "floor", module)},
 
       symbols_{symbols},
+      str_literals_{str_literals},
+
       symbol_table_{make_unique<SymbolTable>()},
 
       functions_{main_func},
@@ -431,16 +436,19 @@ Value* IrEmitter::Eval(const SimpleExpr& expr) {
   return visit(
       Overloaded{
           [this](const auto& ref) -> Value* { return Eval(ref.get()); },
+
           [this](Nil) -> Value* {
             return ConstantStruct::get(
                 value_type_,
                 {builder_.getInt64(kSluaValueNil), builder_.getInt64(0)});
           },
+
           [this](const LiteralInt& literal) -> Value* {
             return ConstantStruct::get(value_type_,
                                        {builder_.getInt64(kSluaValueInteger),
                                         builder_.getInt64(literal.value)});
           },
+
           [this](const LiteralFloat& literal) -> Value* {
             return ConstantStruct::get(
                 value_type_,
@@ -448,6 +456,22 @@ Value* IrEmitter::Eval(const SimpleExpr& expr) {
                  ConstantExpr::getBitCast(
                      ConstantFP::get(builder_.getDoubleTy(), literal.value),
                      builder_.getInt64Ty())});
+          },
+
+          [this](const LiteralString& literal) -> Value* {
+            LLVMContext& context = builder_.getContext();
+            Constant* str = ConstantDataArray::getString(
+                context, str_literals_[literal.value], true);
+            GlobalVariable* str_global =
+                new GlobalVariable(*module_, str->getType(), true,
+                                   GlobalVariable::PrivateLinkage, str);
+            return ConstantStruct::get(
+                value_type_,
+                {
+                    builder_.getInt64(kSluaValueString),
+                    ConstantExpr::getInBoundsGetElementPtr(
+                        str->getType(), str_global, builder_.getInt32(0)),
+                });
           },
       },
       expr.expr);
@@ -1383,7 +1407,7 @@ void Emitter::EmitObjectFile(const string& filename) const {
   BasicBlock* entry_block = BasicBlock::Create(context, "entry", slua_main);
   builder.SetInsertPoint(entry_block);
 
-  IrEmitter emitter{builder, module.get(), symbol_table_, slua_main};
+  IrEmitter emitter{builder, module.get(), symbols_, str_literals_, slua_main};
   emitter.EnterScope();
   emitter.Emit(parser_.root());
   emitter.LeaveScope();

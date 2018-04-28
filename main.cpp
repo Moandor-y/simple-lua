@@ -41,7 +41,7 @@ int main() {
 
   try {
     Parser parser{lexemes};
-    Emitter emitter{parser, symbols};
+    Emitter emitter{parser, symbols, string_literals};
     emitter.EmitObjectFile("output.o");
   } catch (const ParserException& e) {
     cout << e.what() << '\n';

@@ -61,6 +61,9 @@ SluaValue slua_print(vector<SluaValue>& args) noexcept {
       case kSluaValueFloat:
         cout << value.value.float_val;
         break;
+      case kSluaValueString:
+        cout << value.value.str_val;
+        break;
       default:
         cout << "Unrecognized value";
         break;

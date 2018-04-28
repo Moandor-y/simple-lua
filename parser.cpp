@@ -41,6 +41,7 @@ using node::IfStat;
 using node::Index;
 using node::LiteralFloat;
 using node::LiteralInt;
+using node::LiteralString;
 using node::LocalFunc;
 using node::LocalStat;
 using node::Nil;
@@ -134,7 +135,7 @@ Parser::Parser(const vector<Lexeme>& lexemes)
     : lexemes_(lexemes), root_(ParseStatList()) {}
 
 SimpleExpr& Parser::ParseSimpleExpr() {
-  // SimpleExpr -> nil | int | float | SuffixedExp
+  // SimpleExpr -> nil | int | float | string | SuffixedExp
   switch (current().type) {
     case Lexeme::Type::kKeywordNil:
       Next();
@@ -146,6 +147,11 @@ SimpleExpr& Parser::ParseSimpleExpr() {
       break;
     case Lexeme::Type::kLiteralFloat:
       nodes_.emplace_back(SimpleExpr{LiteralFloat{current().data.float_value}});
+      Next();
+      break;
+    case Lexeme::Type::kLiteralString:
+      nodes_.emplace_back(
+          SimpleExpr{LiteralString{current().data.string_value}});
       Next();
       break;
     case Lexeme::Type::kLeftBrace:
