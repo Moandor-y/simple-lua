@@ -22,7 +22,6 @@ A compiler which compiles (a subset of) lua to machine code.
 - [x] Integer literal
 - [x] Floating point literal
 - [x] String literal
-- [ ] String GC
 - [ ] Function closure
 - [ ] Operator overloading
 
