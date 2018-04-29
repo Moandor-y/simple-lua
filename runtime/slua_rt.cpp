@@ -25,9 +25,11 @@ using std::cout;
 using std::function;
 using std::int64_t;
 using std::list;
+using std::memcpy;
 using std::size_t;
 using std::strcmp;
 using std::string;
+using std::strlen;
 using std::terminate;
 using std::unordered_map;
 using std::vector;
@@ -269,6 +271,50 @@ SluaValue* slua_table_access(SluaValue lhs, SluaValue rhs) noexcept {
 
   TableHash& table_hash = *static_cast<TableHash*>(table->hash_ptr);
   return &table_hash[rhs];
+}
+
+char* slua_string_new(const char* str) noexcept {
+  using gsl::index;
+  index len = strlen(str);
+  unsigned char* storage = new unsigned char[len + sizeof(int64_t) + 1];
+  int64_t count = 1;
+  memcpy(storage, &count, sizeof(int64_t));
+#ifndef NDEBUG
+  cout << "String allocated: " << static_cast<const void*>(storage) << '\n';
+#endif
+  return static_cast<char*>(static_cast<void*>(storage + sizeof(int64_t)));
+}
+
+void slua_string_ref_inc(char* str) noexcept {
+  unsigned char* storage =
+      static_cast<unsigned char*>(static_cast<void*>(str)) - sizeof(int64_t);
+  int64_t count;
+  memcpy(&count, storage, sizeof(int64_t));
+  ++count;
+  memcpy(storage, &count, sizeof(int64_t));
+#ifndef NDEBUG
+  cout << "String " << static_cast<const void*>(storage)
+       << " ref count increased to: " << count << '\n';
+#endif
+}
+
+void slua_string_ref_dec(char* str) noexcept {
+  unsigned char* storage =
+      static_cast<unsigned char*>(static_cast<void*>(str)) - sizeof(int64_t);
+  int64_t count;
+  memcpy(&count, storage, sizeof(int64_t));
+  --count;
+  memcpy(storage, &count, sizeof(int64_t));
+#ifndef NDEBUG
+  cout << "String " << static_cast<const void*>(storage)
+       << " ref count decreased to: " << count << '\n';
+#endif
+  if (count == 0) {
+#ifndef NDEBUG
+    cout << "String deallocated: " << static_cast<const void*>(storage) << '\n';
+#endif
+    delete[] storage;
+  }
 }
 }  // extern "C"
 
