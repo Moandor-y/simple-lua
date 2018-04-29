@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -52,6 +53,7 @@ using std::holds_alternative;
 using std::is_same_v;
 using std::make_unique;
 using std::move;
+using std::reference_wrapper;
 using std::runtime_error;
 using std::string;
 using std::to_string;
@@ -101,6 +103,7 @@ using node::ExpType;
 using node::Expr;
 using node::ExprStat;
 using node::Field;
+using node::FieldSel;
 using node::ForStat;
 using node::FuncBody;
 using node::FuncCall;
@@ -155,61 +158,9 @@ class IrEmitter {
   IrEmitter(IRBuilder<>&, Module*, const vector<string>& symbols,
             const vector<string>& str_literals, Function* main_func);
 
-  void Emit(const StatList&);
-  void Emit(const Statement&);
-  void Emit(const IfStat&);
-  void Emit(const ExprStat&);
-  void Emit(const Assignment&);
-  void Emit(const ForStat&);
-  void Emit(const FuncStat&);
-  void Emit(const RetStat&);
-  void Emit(const LocalStat&);
-  void Emit(const LocalFunc&);
-  void Emit(const FuncBody&, Function*);
-  void EmitAssignment(Value* addr, Value* value);
-  void EmitBreak();
-  Value* Eval(const Expr&);
-  Value* Eval(const SimpleExpr&);
-  Value* Eval(const Unop&);
-  Value* Eval(const Binop&);
-  Value* Eval(const SuffixedExp&);
-  Value* Eval(const PrimaryExp&);
-  Value* Eval(const FuncCall&);
-  Value* Eval(const Constructor&);
-  Value* Eval(const Field&);
-  Value* Eval(const Index&);
-  Value* Eval(const FuncExpr&);
-  Value* EvalArith(Value*, Value*, ArithOp);
-  Value* EvalLogic(Value*, Value*, LogicOp);
-  Value* EvalIntArith(Value*, Value*, ArithOp);
-  Value* EvalFloatArith(Value*, Value*, ArithOp);
-  Value* Addr(const SuffixedExp&, bool is_local);
-  Value* Addr(const PrimaryExp&, bool is_local);
-  Value* Addr(const Index&);
-  Value* Addr(Symbol, bool is_local);
-  Value* ToBool(Value*);
-  Value* LookupSymbol(const string&, bool is_local);
-  Value* ExtractType(Value*);
-  Value* ExtractValue(Value*);
-  Value* PointerToValue(Value* ptr);
-  Value* PointerToType(Value* ptr);
-  Value* ValueToFloat(Value*);
-  Value* CallOverloadedOp(Value*, Value*, ArithOp);
   void EnterScope();
   void LeaveScope();
-  void EmitDestroyScope(SymbolTable&);
-  BasicBlock* CreateBlock(const string& name);
-  void TableRefInc(Value*);
-  void TableRefDec(Value*);
-  void StringRefInc(Value*);
-  void StringRefDec(Value*);
-  Value* GetTablePtr(Value*);
-  Value* GetStringPtr(Value*);
-  void TableArrayAppend(Value* value, Value* table_ptr);
-  Value* PointerToTableArraySize(Value* table_ptr);
-  Value* PointerToTableArrayCapacity(Value* table_ptr);
-  Value* PointerToTableArray(Value* table_ptr);
-  Function* CreateFunc(Value* ptr);
+  void Emit(const StatList&);
 
   const vector<Function*> functions() const { return functions_; }
 
@@ -257,6 +208,64 @@ class IrEmitter {
     BasicBlock* post_block;
     SymbolTable* scope;
   } break_info_{};
+
+  unordered_map<string, Value*> global_strs_;
+
+  void Emit(const Statement&);
+  void Emit(const IfStat&);
+  void Emit(const ExprStat&);
+  void Emit(const Assignment&);
+  void Emit(const ForStat&);
+  void Emit(const FuncStat&);
+  void Emit(const RetStat&);
+  void Emit(const LocalStat&);
+  void Emit(const LocalFunc&);
+  void Emit(const FuncBody&, Function*);
+  void EmitAssignment(Value* addr, Value* value);
+  void EmitBreak();
+  Value* Eval(const Expr&);
+  Value* Eval(const SimpleExpr&);
+  Value* Eval(const Unop&);
+  Value* Eval(const Binop&);
+  Value* Eval(const SuffixedExp&);
+  Value* Eval(const PrimaryExp&);
+  Value* Eval(const FuncCall&);
+  Value* Eval(const Constructor&);
+  Value* Eval(const Field&);
+  Value* Eval(const Index&);
+  Value* Eval(const FuncExpr&);
+  Value* Eval(const FieldSel&);
+  Value* EvalArith(Value*, Value*, ArithOp);
+  Value* EvalLogic(Value*, Value*, LogicOp);
+  Value* EvalIntArith(Value*, Value*, ArithOp);
+  Value* EvalFloatArith(Value*, Value*, ArithOp);
+  Value* Addr(const SuffixedExp&, bool is_local);
+  Value* Addr(const PrimaryExp&, bool is_local);
+  Value* Addr(const Index&);
+  Value* Addr(const FieldSel&);
+  Value* Addr(Symbol, bool is_local);
+  Value* ToBool(Value*);
+  Value* LookupSymbol(const string&, bool is_local);
+  Value* ExtractType(Value*);
+  Value* ExtractValue(Value*);
+  Value* PointerToValue(Value* ptr);
+  Value* PointerToType(Value* ptr);
+  Value* ValueToFloat(Value*);
+  Value* CallOverloadedOp(Value*, Value*, ArithOp);
+  void EmitDestroyScope(SymbolTable&);
+  BasicBlock* CreateBlock(const string& name);
+  void TableRefInc(Value*);
+  void TableRefDec(Value*);
+  void StringRefInc(Value*);
+  void StringRefDec(Value*);
+  Value* GetTablePtr(Value*);
+  Value* GetStringPtr(Value*);
+  void TableArrayAppend(Value* value, Value* table_ptr);
+  Value* PointerToTableArraySize(Value* table_ptr);
+  Value* PointerToTableArrayCapacity(Value* table_ptr);
+  Value* PointerToTableArray(Value* table_ptr);
+  Function* CreateFunc(Value* ptr);
+  Value* GetGlobalString(const string&);
 };
 
 IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
@@ -471,22 +480,7 @@ Value* IrEmitter::Eval(const SimpleExpr& expr) {
           },
 
           [this](const LiteralString& literal) -> Value* {
-            LLVMContext& context = builder_.getContext();
-            Constant* str = ConstantDataArray::getString(
-                context, str_literals_[literal.value], true);
-            StructType* storage_type = StructType::get(
-                context, {builder_.getInt64Ty(), str->getType()});
-            Constant* storage_value =
-                ConstantStruct::get(storage_type, {builder_.getInt64(1), str});
-            GlobalVariable* storage = new GlobalVariable(
-                *module_, storage_type, false, GlobalVariable::PrivateLinkage,
-                storage_value);
-            Constant* str_ptr =
-                ConstantExpr::getBitCast(storage, builder_.getInt8PtrTy());
-            str_ptr = ConstantExpr::getInBoundsGetElementPtr(
-                builder_.getInt8Ty(), str_ptr, builder_.getInt64(8));
-            return ConstantStruct::get(
-                value_type_, {builder_.getInt64(kSluaValueString), str_ptr});
+            return GetGlobalString(str_literals_[literal.value]);
           },
       },
       expr.expr);
@@ -713,11 +707,11 @@ void IrEmitter::EmitAssignment(Value* addr, Value* value) {
 Value* IrEmitter::Addr(const SuffixedExp& expr, bool is_local) {
   return visit(
       Overloaded{
-          [this, is_local](const PrimaryExp& exp) -> Value* {
+          [this](const auto& ref) -> Value* { return Addr(ref.get()); },
+          [this, is_local](reference_wrapper<const PrimaryExp> exp) -> Value* {
             return Addr(exp, is_local);
           },
-          [this](const Index& in) -> Value* { return Addr(in); },
-          [](const FuncCall&) -> Value* {
+          [](reference_wrapper<const FuncCall>) -> Value* {
             throw ParserException{"Cannot get address of function call"};
           },
       },
@@ -1449,6 +1443,42 @@ void IrEmitter::EmitBreak() {
   builder_.CreateBr(break_info_.post_block);
 
   builder_.SetInsertPoint(CreateBlock("break_dummy"));
+}
+
+Value* IrEmitter::GetGlobalString(const string& val) {
+  auto iter = global_strs_.find(val);
+  if (iter != global_strs_.end()) {
+    return iter->second;
+  }
+
+  LLVMContext& context = builder_.getContext();
+  Constant* str = ConstantDataArray::getString(context, val, true);
+  StructType* storage_type =
+      StructType::get(context, {builder_.getInt64Ty(), str->getType()});
+  Constant* storage_value =
+      ConstantStruct::get(storage_type, {builder_.getInt64(1), str});
+  GlobalVariable* storage =
+      new GlobalVariable(*module_, storage_type, false,
+                         GlobalVariable::PrivateLinkage, storage_value);
+  Constant* str_ptr =
+      ConstantExpr::getBitCast(storage, builder_.getInt8PtrTy());
+  str_ptr = ConstantExpr::getInBoundsGetElementPtr(
+      builder_.getInt8Ty(), str_ptr, builder_.getInt64(8));
+  Value* result = ConstantStruct::get(
+      value_type_, {builder_.getInt64(kSluaValueString), str_ptr});
+
+  global_strs_.emplace(val, result);
+  return result;
+}
+
+Value* IrEmitter::Eval(const FieldSel& field_sel) {
+  return builder_.CreateLoad(Addr(field_sel));
+}
+
+Value* IrEmitter::Addr(const FieldSel& field_sel) {
+  Value* lhs = Eval(field_sel.lhs);
+  Value* rhs_name = GetGlobalString(symbols_[field_sel.rhs.name]);
+  return builder_.CreateCall(func_table_access_, {lhs, rhs_name});
 }
 }  // namespace
 

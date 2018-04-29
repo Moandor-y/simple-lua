@@ -31,6 +31,7 @@ using node::ExpType;
 using node::Expr;
 using node::ExprStat;
 using node::Field;
+using node::FieldSel;
 using node::ForStat;
 using node::FuncBody;
 using node::FuncCall;
@@ -65,7 +66,7 @@ ExpType SuffixedExp::type() const noexcept {
           return ref.get().type();
         } else if constexpr (is_same_v<T, FuncCall>) {
           return ExpType::kRight;
-        } else if constexpr (is_same_v<T, Index>) {
+        } else if constexpr (is_same_v<T, Index> || is_same_v<T, FieldSel>) {
           return ExpType::kLeft;
         } else {
           static_assert(FalseType<T>::value);
@@ -274,20 +275,22 @@ TestThenBlock& Parser::ParseTestThenBlock() {
 }
 
 SuffixedExp& Parser::ParseSuffixedExp() {
-  // SuffixedExp -> PrimaryExp | FuncCall
+  // SuffixedExp -> FieldSel | Index | PrimaryExp | FuncCall
   nodes_.emplace_back(SuffixedExp{ParsePrimaryExp()});
   while (true) {
+    SuffixedExp& expr = get<SuffixedExp>(nodes_.back());
     switch (current().type) {
+      case Lexeme::Type::kDot:
+        nodes_.emplace_back(SuffixedExp{ParseFieldSel(expr)});
+        break;
       case Lexeme::Type::kLeftSquareBracket:
-        nodes_.emplace_back(
-            SuffixedExp{ParseIndex(get<SuffixedExp>(nodes_.back()))});
+        nodes_.emplace_back(SuffixedExp{ParseIndex(expr)});
         break;
       case Lexeme::Type::kLeftBracket:
-        nodes_.emplace_back(
-            SuffixedExp{ParseFuncCall(get<SuffixedExp>(nodes_.back()))});
+        nodes_.emplace_back(SuffixedExp{ParseFuncCall(expr)});
         break;
       default:
-        return get<SuffixedExp>(nodes_.back());
+        return expr;
     }
   }
 }
@@ -420,7 +423,7 @@ Field& Parser::ParseField() {
 }
 
 Index& Parser::ParseIndex(SuffixedExp& lhs) {
-  // Index -> '[' Expr ']'
+  // Index -> SuffixedExp '[' Expr ']'
   Match(Lexeme::Type::kLeftSquareBracket);
   nodes_.emplace_back(Index{lhs, ParseExpr()});
   Match(Lexeme::Type::kRightSquareBracket);
@@ -515,6 +518,17 @@ FuncExpr& Parser::ParseFuncExpr() {
   Match(Lexeme::Type::kKeywordFunction);
   nodes_.emplace_back(FuncExpr{ParseFuncBody()});
   return get<FuncExpr>(nodes_.back());
+}
+
+FieldSel& Parser::ParseFieldSel(SuffixedExp& lhs) {
+  // FieldSel -> SuffixedExp '.' symbol
+  Match(Lexeme::Type::kDot);
+  if (current().type != Lexeme::Type::kSymbol) {
+    SyntaxError();
+  }
+  nodes_.emplace_back(FieldSel{lhs, Symbol{current().data.symbol_name}});
+  Next();
+  return get<FieldSel>(nodes_.back());
 }
 
 bool Parser::is_block_follow() const noexcept {

@@ -52,6 +52,7 @@ struct LocalStat;
 struct LocalFunc;
 struct FuncBody;
 struct FuncExpr;
+struct FieldSel;
 
 struct Nil {};
 
@@ -161,7 +162,8 @@ struct Binop {
 struct SuffixedExp {
   std::variant<std::reference_wrapper<const PrimaryExp>,
                std::reference_wrapper<const FuncCall>,
-               std::reference_wrapper<const Index>>
+               std::reference_wrapper<const Index>,
+               std::reference_wrapper<const FieldSel>>
       expr;
 
   ExpType type() const noexcept;
@@ -246,11 +248,17 @@ struct FuncExpr {
   const FuncBody& body;
 };
 
-using Node = std::variant<Nil, StatList, Statement, IfStat, TestThenBlock, Expr,
-                          SimpleExpr, Unop, Binop, SuffixedExp, PrimaryExp,
-                          ExprStat, Assignment, FuncCall, ExpList, ForStat,
-                          Constructor, Field, Index, FuncStat, FuncName,
-                          RetStat, LocalStat, LocalFunc, FuncBody, FuncExpr>;
+struct FieldSel {
+  const SuffixedExp& lhs;
+  Symbol rhs;
+};
+
+using Node =
+    std::variant<Nil, StatList, Statement, IfStat, TestThenBlock, Expr,
+                 SimpleExpr, Unop, Binop, SuffixedExp, PrimaryExp, ExprStat,
+                 Assignment, FuncCall, ExpList, ForStat, Constructor, Field,
+                 Index, FuncStat, FuncName, RetStat, LocalStat, LocalFunc,
+                 FuncBody, FuncExpr, FieldSel>;
 }  // namespace node
 
 class Parser {
@@ -322,6 +330,7 @@ class Parser {
   node::LocalFunc& ParseLocalFunc();
   node::FuncBody& ParseFuncBody();
   node::FuncExpr& ParseFuncExpr();
+  node::FieldSel& ParseFieldSel(node::SuffixedExp& lhs);
   bool is_block_follow() const noexcept;
   bool is_unop() const noexcept;
   node::Unop::Type unop_type() const noexcept;
