@@ -576,8 +576,8 @@ Value* IrEmitter::Eval(const FuncCall& func_call) {
 
   Value* result_ptr = builder_.CreateAlloca(value_type_);
 
-  BasicBlock* then_block = CreateBlock("func_check_then");
-  BasicBlock* post_block = CreateBlock("func_check_post");
+  BasicBlock* then_block = CreateBlock("call_check_then");
+  BasicBlock* post_block = CreateBlock("call_check_post");
   builder_.CreateCondBr(
       builder_.CreateNot(builder_.CreateOr(is_func, is_builtin_func)),
       then_block, post_block);
@@ -588,8 +588,8 @@ Value* IrEmitter::Eval(const FuncCall& func_call) {
   builder_.CreateUnreachable();
 
   builder_.SetInsertPoint(post_block);
-  then_block = CreateBlock("func_type_then");
-  post_block = CreateBlock("func_type_post");
+  then_block = CreateBlock("call_type_then");
+  post_block = CreateBlock("call_type_post");
   BasicBlock* else_block = CreateBlock("func_type_else");
   builder_.CreateCondBr(is_func, then_block, else_block);
 
@@ -641,7 +641,11 @@ Value* IrEmitter::Eval(const FuncCall& func_call) {
   builder_.CreateBr(post_block);
 
   builder_.SetInsertPoint(post_block);
-  return builder_.CreateLoad(result_ptr);
+  result = builder_.CreateLoad(result_ptr);
+  Value* temp_ptr = LookupSymbol("_temp_" + to_string(temp_name_), true);
+  ++temp_name_;
+  builder_.CreateStore(result, temp_ptr);
+  return result;
 }
 
 void IrEmitter::Emit(const Assignment& assignment) {
@@ -1342,11 +1346,35 @@ void IrEmitter::Emit(const RetStat& ret_stat) {
     ret_value = ConstantStruct::get(
         value_type_, {builder_.getInt64(kSluaValueNil), builder_.getInt64(0)});
   }
+
+  Value* ret_type = ExtractType(ret_value);
+  BasicBlock* then_block = CreateBlock("return_is_table_then");
+  BasicBlock* post_block = CreateBlock("return_is_table_post");
+  Value* cmp =
+      builder_.CreateICmpEQ(ret_type, builder_.getInt64(kSluaValueTable));
+  builder_.CreateCondBr(cmp, then_block, post_block);
+
+  builder_.SetInsertPoint(then_block);
+  TableRefInc(ret_value);
+  builder_.CreateBr(post_block);
+
+  builder_.SetInsertPoint(post_block);
+  then_block = CreateBlock("return_is_string_then");
+  post_block = CreateBlock("return_is_string_post");
+  cmp = builder_.CreateICmpEQ(ret_type, builder_.getInt64(kSluaValueString));
+  builder_.CreateCondBr(cmp, then_block, post_block);
+
+  builder_.SetInsertPoint(then_block);
+  StringRefInc(ret_value);
+  builder_.CreateBr(post_block);
+
+  builder_.SetInsertPoint(post_block);
   SymbolTable* table = symbol_table_.get();
   while (table->func == curr_func_) {
     EmitDestroyScope(*table);
     table = table->next.get();
   }
+
   builder_.CreateRet(ret_value);
   builder_.SetInsertPoint(CreateBlock("return_dummy"));
 }
