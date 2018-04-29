@@ -38,17 +38,21 @@ using gsl::make_span;
 using gsl::span;
 
 using TableHash = unordered_map<SluaValue, SluaValue>;
+}  // namespace
 
+extern "C" {
+[[noreturn]] void slua_runtime_error(const char* message) noexcept {
+  cerr << message << '\n';
+  terminate();
+}
+}  // extern "C"
+
+namespace {
 unordered_map<string, function<SluaValue(vector<SluaValue>&)>>
     builtin_functions;
 
 list<SluaTable> tables;
 unordered_map<SluaTable*, list<SluaTable>::iterator> table_iters;
-
-[[noreturn]] void slua_runtime_error(const char* message) noexcept {
-  cerr << message << '\n';
-  terminate();
-}
 }  // namespace
 
 namespace std {
@@ -148,6 +152,10 @@ SluaValue slua_div(SluaValue, SluaValue) noexcept {
 }
 
 SluaValue slua_idiv(SluaValue, SluaValue) noexcept {
+  slua_runtime_error("Not implemented");
+}
+
+SluaValue slua_mod(SluaValue, SluaValue) noexcept {
   slua_runtime_error("Not implemented");
 }
 

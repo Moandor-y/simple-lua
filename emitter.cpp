@@ -1498,8 +1498,6 @@ void Emitter::EmitObjectFile(const string& filename) const {
     fpm.run(*func);
   }
 
-  module->print(llvm::outs(), nullptr);
-
   InitializeNativeTarget();
   InitializeNativeTargetAsmPrinter();
 
