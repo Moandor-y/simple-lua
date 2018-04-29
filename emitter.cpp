@@ -181,6 +181,7 @@ class IrEmitter {
   Function* func_gt_;              // value f(value, value)
   Function* func_ge_;              // value f(value, value)
   Function* func_eq_;              // value f(value, value)
+  Function* func_concat_;          // value f(value, value)
   Function* func_len_;             // value f(value)
   Function* func_runtime_error_;   // void f(const char*)
   Function* func_invoke_builtin_;  // value f(const char* name, int count, ...)
@@ -318,6 +319,9 @@ IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
       func_eq_{Function::Create(
           FunctionType::get(value_type_, {value_type_, value_type_}, false),
           Function::ExternalLinkage, "slua_eq", module)},
+      func_concat_{Function::Create(
+          FunctionType::get(value_type_, {value_type_, value_type_}, false),
+          Function::ExternalLinkage, "slua_concat", module)},
 
       func_len_{
           Function::Create(FunctionType::get(value_type_, {value_type_}, false),
@@ -526,6 +530,13 @@ Value* IrEmitter::Eval(const Binop& op) {
       return EvalLogic(lhs, rhs, LogicOp::kAnd);
     case node::Binop::kOr:
       return EvalLogic(lhs, rhs, LogicOp::kOr);
+    case node::Binop::kConcat: {
+      Value* result = builder_.CreateCall(func_concat_, {lhs, rhs});
+      Value* temp_ptr = LookupSymbol("_temp_" + to_string(temp_name_), true);
+      ++temp_name_;
+      builder_.CreateStore(result, temp_ptr);
+      return result;
+    }
     default:
       throw runtime_error{"Not implemented"};
   }

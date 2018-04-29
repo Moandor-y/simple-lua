@@ -31,6 +31,7 @@ using std::strcmp;
 using std::string;
 using std::strlen;
 using std::terminate;
+using std::to_string;
 using std::unordered_map;
 using std::vector;
 
@@ -53,6 +54,35 @@ unordered_map<string, function<SluaValue(vector<SluaValue>&)>>
 
 list<SluaTable> tables;
 unordered_map<SluaTable*, list<SluaTable>::iterator> table_iters;
+
+string ToString(SluaValue val) {
+  switch (val.type) {
+    case kSluaValueNil:
+      return "nil";
+    case kSluaValueBool:
+      return (val.value.bool_val != 0 ? "true" : "false");
+    case kSluaValueInteger:
+      return to_string(val.value.int_val);
+    case kSluaValueFloat:
+      return to_string(val.value.float_val);
+    case kSluaValueString:
+      return val.value.str_val;
+    default:
+      return "<Unrecognized value>";
+  }
+}
+
+char* NewString(const string& str) noexcept {
+  using gsl::index;
+  unsigned char* storage = new unsigned char[str.size() + sizeof(int64_t) + 1];
+  int64_t count = 1;
+  memcpy(storage, &count, sizeof(int64_t));
+  memcpy(storage + sizeof(int64_t), str.c_str(), str.size() + 1);
+#ifndef NDEBUG
+  cout << "String allocated: " << static_cast<const void*>(storage) << '\n';
+#endif
+  return static_cast<char*>(static_cast<void*>(storage + sizeof(int64_t)));
+}
 }  // namespace
 
 namespace std {
@@ -93,26 +123,7 @@ SluaValue slua_print(vector<SluaValue>& args) noexcept {
     } else {
       cout << ' ';
     }
-    switch (value.type) {
-      case kSluaValueNil:
-        cout << "nil";
-        break;
-      case kSluaValueBool:
-        cout << (value.value.bool_val != 0 ? "true" : "false");
-        break;
-      case kSluaValueInteger:
-        cout << value.value.int_val;
-        break;
-      case kSluaValueFloat:
-        cout << value.value.float_val;
-        break;
-      case kSluaValueString:
-        cout << value.value.str_val;
-        break;
-      default:
-        cout << "Unrecognized value";
-        break;
-    }
+    cout << ToString(value);
   }
   cout << '\n';
   return SluaValue{kSluaValueNil, {0}};
@@ -179,14 +190,23 @@ SluaValue slua_eq(SluaValue, SluaValue) noexcept {
   slua_runtime_error("Not implemented");
 }
 
+SluaValue slua_concat(SluaValue lhs, SluaValue rhs) noexcept {
+  string str = ToString(lhs) + ToString(rhs);
+  SluaValue result{};
+  result.type = kSluaValueString;
+  result.value.str_val = NewString(str);
+  return result;
+}
+
 SluaValue slua_len(SluaValue value) noexcept {
   if (value.type != kSluaValueTable) {
     slua_runtime_error("Error: cannot get length of value");
   }
+  const SluaTable& table = *static_cast<const SluaTable*>(value.value.address);
+  const TableHash& hash = *static_cast<const TableHash*>(table.hash_ptr);
   SluaValue result{};
   result.type = kSluaValueInteger;
-  result.value.int_val =
-      static_cast<SluaTable*>(value.value.address)->array_size - 1;
+  result.value.int_val = table.array_size - 1 + hash.size();
   return result;
 }
 
@@ -279,18 +299,6 @@ SluaValue* slua_table_access(SluaValue lhs, SluaValue rhs) noexcept {
 
   TableHash& table_hash = *static_cast<TableHash*>(table->hash_ptr);
   return &table_hash[rhs];
-}
-
-char* slua_string_new(const char* str) noexcept {
-  using gsl::index;
-  index len = strlen(str);
-  unsigned char* storage = new unsigned char[len + sizeof(int64_t) + 1];
-  int64_t count = 1;
-  memcpy(storage, &count, sizeof(int64_t));
-#ifndef NDEBUG
-  cout << "String allocated: " << static_cast<const void*>(storage) << '\n';
-#endif
-  return static_cast<char*>(static_cast<void*>(storage + sizeof(int64_t)));
 }
 
 void slua_string_ref_inc(char* str) noexcept {
