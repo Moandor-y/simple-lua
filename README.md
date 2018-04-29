@@ -18,7 +18,8 @@ A compiler which compiles (a subset of) lua to machine code.
 - [x] Table array part
 - [x] Table hash part
 - [x] Table indexing
-- [ ] Table field access
+- [x] Table field access
+- [ ] Table method call
 - [x] Integer literal
 - [x] Floating point literal
 - [x] String literal
