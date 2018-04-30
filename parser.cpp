@@ -40,6 +40,7 @@ using node::FuncName;
 using node::FuncStat;
 using node::IfStat;
 using node::Index;
+using node::LiteralBool;
 using node::LiteralFloat;
 using node::LiteralInt;
 using node::LiteralString;
@@ -153,6 +154,14 @@ SimpleExpr& Parser::ParseSimpleExpr() {
     case Lexeme::Type::kLiteralString:
       nodes_.emplace_back(
           SimpleExpr{LiteralString{current().data.string_value}});
+      Next();
+      break;
+    case Lexeme::Type::kKeywordFalse:
+      nodes_.emplace_back(SimpleExpr{LiteralBool{false}});
+      Next();
+      break;
+    case Lexeme::Type::kKeywordTrue:
+      nodes_.emplace_back(SimpleExpr{LiteralBool{true}});
       Next();
       break;
     case Lexeme::Type::kLeftBrace:

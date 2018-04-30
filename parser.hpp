@@ -68,6 +68,10 @@ struct LiteralString {
   gsl::index value;
 };
 
+struct LiteralBool {
+  bool value;
+};
+
 struct Symbol {
   gsl::index name;
 };
@@ -108,7 +112,7 @@ struct Expr {
 };
 
 struct SimpleExpr {
-  std::variant<Nil, LiteralInt, LiteralFloat, LiteralString,
+  std::variant<Nil, LiteralInt, LiteralFloat, LiteralString, LiteralBool,
                std::reference_wrapper<const SuffixedExp>,
                std::reference_wrapper<const Constructor>,
                std::reference_wrapper<const FuncExpr>>

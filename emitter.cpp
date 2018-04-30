@@ -112,6 +112,7 @@ using node::FuncName;
 using node::FuncStat;
 using node::IfStat;
 using node::Index;
+using node::LiteralBool;
 using node::LiteralFloat;
 using node::LiteralInt;
 using node::LiteralString;
@@ -237,7 +238,7 @@ class IrEmitter {
   Value* Eval(const FuncExpr&);
   Value* Eval(const FieldSel&);
   Value* EvalArith(Value*, Value*, ArithOp);
-  Value* EvalLogic(Value*, Value*, LogicOp);
+  Value* EvalLogic(const Expr&, const Expr&, LogicOp);
   Value* EvalIntArith(Value*, Value*, ArithOp);
   Value* EvalFloatArith(Value*, Value*, ArithOp);
   Value* Addr(const SuffixedExp&, bool is_local);
@@ -462,29 +463,43 @@ Value* IrEmitter::Eval(const SimpleExpr& expr) {
       Overloaded{
           [this](const auto& ref) -> Value* { return Eval(ref.get()); },
 
-          [this](Nil) -> Value* {
-            return ConstantStruct::get(
-                value_type_,
-                {builder_.getInt64(kSluaValueNil), builder_.getInt64(0)});
+          [this](const Nil&) -> Value* {
+            return ConstantStruct::get(value_type_,
+                                       {
+                                           builder_.getInt64(kSluaValueNil),
+                                           builder_.getInt64(0),
+                                       });
           },
 
           [this](const LiteralInt& literal) -> Value* {
             return ConstantStruct::get(value_type_,
-                                       {builder_.getInt64(kSluaValueInteger),
-                                        builder_.getInt64(literal.value)});
+                                       {
+                                           builder_.getInt64(kSluaValueInteger),
+                                           builder_.getInt64(literal.value),
+                                       });
           },
 
           [this](const LiteralFloat& literal) -> Value* {
             return ConstantStruct::get(
                 value_type_,
-                {builder_.getInt64(kSluaValueFloat),
-                 ConstantExpr::getBitCast(
-                     ConstantFP::get(builder_.getDoubleTy(), literal.value),
-                     builder_.getInt64Ty())});
+                {
+                    builder_.getInt64(kSluaValueFloat),
+                    ConstantExpr::getBitCast(
+                        ConstantFP::get(builder_.getDoubleTy(), literal.value),
+                        builder_.getInt64Ty()),
+                });
           },
 
           [this](const LiteralString& literal) -> Value* {
             return GetGlobalString(str_literals_[literal.value]);
+          },
+
+          [this](const LiteralBool& literal) -> Value* {
+            return ConstantStruct::get(value_type_,
+                                       {
+                                           builder_.getInt64(kSluaValueBool),
+                                           builder_.getInt64(literal.value),
+                                       });
           },
       },
       expr.expr);
@@ -500,47 +515,50 @@ Value* IrEmitter::Eval(const Unop& op) {
 }
 
 Value* IrEmitter::Eval(const Binop& op) {
-  Value* lhs = Eval(op.lhs);
-  Value* rhs = Eval(op.rhs);
-  Function* func;
   switch (op.type) {
-    case node::Binop::kAdd:
-      return EvalArith(lhs, rhs, ArithOp::kAdd);
-    case node::Binop::kSub:
-      return EvalArith(lhs, rhs, ArithOp::kSub);
-    case node::Binop::kMul:
-      return EvalArith(lhs, rhs, ArithOp::kMul);
-    case node::Binop::kDiv:
-      return EvalArith(lhs, rhs, ArithOp::kDiv);
-    case node::Binop::kIntDiv:
-      return EvalArith(lhs, rhs, ArithOp::kIntDiv);
-    case node::Binop::kMod:
-      return EvalArith(lhs, rhs, ArithOp::kMod);
-    case node::Binop::kLess:
-      return EvalArith(lhs, rhs, ArithOp::kLess);
-    case node::Binop::kLessEq:
-      return EvalArith(lhs, rhs, ArithOp::kLessEq);
-    case node::Binop::kGreater:
-      return EvalArith(lhs, rhs, ArithOp::kGreater);
-    case node::Binop::kGreaterEq:
-      return EvalArith(lhs, rhs, ArithOp::kGreaterEq);
-    case node::Binop::kEq:
-      return EvalArith(lhs, rhs, ArithOp::kEq);
-    case node::Binop::kAnd:
-      return EvalLogic(lhs, rhs, LogicOp::kAnd);
-    case node::Binop::kOr:
-      return EvalLogic(lhs, rhs, LogicOp::kOr);
-    case node::Binop::kConcat: {
-      Value* result = builder_.CreateCall(func_concat_, {lhs, rhs});
-      Value* temp_ptr = LookupSymbol("_temp_" + to_string(temp_name_), true);
-      ++temp_name_;
-      builder_.CreateStore(result, temp_ptr);
-      return result;
+    case Binop::kAnd:
+      return EvalLogic(op.lhs, op.rhs, LogicOp::kAnd);
+    case Binop::kOr:
+      return EvalLogic(op.lhs, op.rhs, LogicOp::kOr);
+    default: {
+      Value* lhs = Eval(op.lhs);
+      Value* rhs = Eval(op.rhs);
+      switch (op.type) {
+        case node::Binop::kAdd:
+          return EvalArith(lhs, rhs, ArithOp::kAdd);
+        case node::Binop::kSub:
+          return EvalArith(lhs, rhs, ArithOp::kSub);
+        case node::Binop::kMul:
+          return EvalArith(lhs, rhs, ArithOp::kMul);
+        case node::Binop::kDiv:
+          return EvalArith(lhs, rhs, ArithOp::kDiv);
+        case node::Binop::kIntDiv:
+          return EvalArith(lhs, rhs, ArithOp::kIntDiv);
+        case node::Binop::kMod:
+          return EvalArith(lhs, rhs, ArithOp::kMod);
+        case node::Binop::kLess:
+          return EvalArith(lhs, rhs, ArithOp::kLess);
+        case node::Binop::kLessEq:
+          return EvalArith(lhs, rhs, ArithOp::kLessEq);
+        case node::Binop::kGreater:
+          return EvalArith(lhs, rhs, ArithOp::kGreater);
+        case node::Binop::kGreaterEq:
+          return EvalArith(lhs, rhs, ArithOp::kGreaterEq);
+        case node::Binop::kEq:
+          return EvalArith(lhs, rhs, ArithOp::kEq);
+        case node::Binop::kConcat: {
+          Value* result = builder_.CreateCall(func_concat_, {lhs, rhs});
+          Value* temp_ptr =
+              LookupSymbol("_temp_" + to_string(temp_name_), true);
+          ++temp_name_;
+          builder_.CreateStore(result, temp_ptr);
+          return result;
+        }
+        default:
+          throw runtime_error{"Not implemented"};
+      }
     }
-    default:
-      throw runtime_error{"Not implemented"};
   }
-  return builder_.CreateCall(func, {lhs, rhs});
 }
 
 Value* IrEmitter::Eval(const SuffixedExp& expr) {
@@ -1390,25 +1408,39 @@ void IrEmitter::Emit(const RetStat& ret_stat) {
   builder_.SetInsertPoint(CreateBlock("return_dummy"));
 }
 
-Value* IrEmitter::EvalLogic(Value* lhs, Value* rhs, LogicOp op) {
+Value* IrEmitter::EvalLogic(const Expr& lhs_expr, const Expr& rhs_expr,
+                            LogicOp op) {
+  Value* lhs = Eval(lhs_expr);
   Value* lhs_bool = ToBool(lhs);
-  Value* rhs_bool = ToBool(rhs);
-  Value* result_value;
+  BasicBlock* lhs_true_block = CreateBlock("logic_lhs_true");
+  BasicBlock* lhs_false_block = CreateBlock("logic_lhs_false");
+  BasicBlock* post_block = CreateBlock("logic_post");
+  Value* result_ptr = builder_.CreateAlloca(value_type_);
+  builder_.CreateCondBr(lhs_bool, lhs_true_block, lhs_false_block);
+
+  builder_.SetInsertPoint(lhs_true_block);
   switch (op) {
     case LogicOp::kAnd:
-      result_value = builder_.CreateAnd(lhs_bool, rhs_bool);
+      builder_.CreateStore(Eval(rhs_expr), result_ptr);
       break;
     case LogicOp::kOr:
-      result_value = builder_.CreateOr(lhs_bool, rhs_bool);
+      builder_.CreateStore(lhs, result_ptr);
       break;
-    default:
-      throw runtime_error{"Logical op not implemented"};
   }
-  Value* result_ptr = builder_.CreateAlloca(value_type_);
-  builder_.CreateStore(builder_.getInt64(kSluaValueBool),
-                       PointerToType(result_ptr));
-  builder_.CreateStore(builder_.CreateZExt(result_value, builder_.getInt64Ty()),
-                       PointerToValue(result_ptr));
+  builder_.CreateBr(post_block);
+
+  builder_.SetInsertPoint(lhs_false_block);
+  switch (op) {
+    case LogicOp::kAnd:
+      builder_.CreateStore(lhs, result_ptr);
+      break;
+    case LogicOp::kOr:
+      builder_.CreateStore(Eval(rhs_expr), result_ptr);
+      break;
+  }
+  builder_.CreateBr(post_block);
+
+  builder_.SetInsertPoint(post_block);
   return builder_.CreateLoad(result_ptr);
 }
 
