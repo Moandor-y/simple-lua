@@ -26,6 +26,7 @@ using std::visit;
 using node::Assignment;
 using node::Binop;
 using node::Constructor;
+using node::DoStat;
 using node::ExpList;
 using node::ExpType;
 using node::Expr;
@@ -222,8 +223,8 @@ StatList& Parser::ParseStatList() {
 }
 
 Statement& Parser::ParseStatement() {
-  // Statement -> ';' | IfStat | ForStat | FuncStat | RetStat | LocalStat |
-  //              LocalFunc | break | ExprStat
+  // Statement -> ';' | IfStat | ForStat | FuncStat | DoStat | RetStat |
+  //              LocalStat | LocalFunc | break | ExprStat
   nodes_.emplace_back(Statement{});
   Statement& statement = get<Statement>(nodes_.back());
   switch (current().type) {
@@ -235,6 +236,9 @@ Statement& Parser::ParseStatement() {
       break;
     case Lexeme::Type::kKeywordFor:
       statement.stat = ParseForStat();
+      break;
+    case Lexeme::Type::kKeywordDo:
+      statement.stat = ParseDoStat();
       break;
     case Lexeme::Type::kKeywordFunction:
       statement.stat = ParseFuncStat();
@@ -593,6 +597,14 @@ FuncNameMethodSel& Parser::ParseFuncNameMethodSel(FuncName& lhs) {
       FuncNameMethodSel{lhs, Symbol{current().data.symbol_name}});
   Next();
   return get<FuncNameMethodSel>(nodes_.back());
+}
+
+DoStat& Parser::ParseDoStat() {
+  // DoStat -> do StatList end
+  Match(Lexeme::Type::kKeywordDo);
+  nodes_.emplace_back(DoStat{ParseStatList()});
+  Match(Lexeme::Type::kKeywordEnd);
+  return get<DoStat>(nodes_.back());
 }
 
 bool Parser::is_block_follow() const noexcept {

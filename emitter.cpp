@@ -99,6 +99,7 @@ using llvm::sys::getDefaultTargetTriple;
 using node::Assignment;
 using node::Binop;
 using node::Constructor;
+using node::DoStat;
 using node::ExpType;
 using node::Expr;
 using node::ExprStat;
@@ -221,6 +222,7 @@ class IrEmitter {
   void Emit(const RetStat&);
   void Emit(const LocalStat&);
   void Emit(const LocalFunc&);
+  void Emit(const DoStat&);
   void Emit(const FuncBody&, Function*, bool is_method);
   void EmitAssignment(Value* addr, Value* value);
   void EmitBreak();
@@ -261,8 +263,6 @@ class IrEmitter {
   Value* ValueToFloat(Value*);
   Value* CallOverloadedOp(Value*, Value*, ArithOp);
   BasicBlock* CreateBlock(const string& name);
-  Value* GetTablePtr(Value*);
-  Value* GetStringPtr(Value*);
   void TableArrayAppend(Value* value, Value* table_ptr);
   Value* PointerToTableArraySize(Value* table_ptr);
   Value* PointerToTableArrayCapacity(Value* table_ptr);
@@ -1072,15 +1072,6 @@ Value* IrEmitter::CallOverloadedOp(Value* lhs, Value* rhs, ArithOp op) {
   }
 }
 
-Value* IrEmitter::GetTablePtr(Value* value) {
-  return builder_.CreateIntToPtr(ExtractValue(value),
-                                 PointerType::getUnqual(table_type_));
-}
-
-Value* IrEmitter::GetStringPtr(Value* value) {
-  return builder_.CreateIntToPtr(ExtractValue(value), builder_.getInt8PtrTy());
-}
-
 Value* IrEmitter::Eval(const Constructor& constructor) {
   Value* table_ptr = builder_.CreateCall(func_table_new_);
   Value* value_ptr = LookupSymbol("_temp_" + to_string(temp_name_), true);
@@ -1406,7 +1397,7 @@ Value* IrEmitter::Eval(const MethodCall& method_call) {
 }
 
 Value* IrEmitter::Addr(const FuncName& func_name) {
-  visit(
+  return visit(
       Overloaded{
           [this](const auto& ref) -> Value* { return Addr(ref.get()); },
           [this](const Symbol& name) -> Value* { return Addr(name, false); },
@@ -1422,6 +1413,12 @@ Value* IrEmitter::Addr(const FuncNameFieldSel& sel) {
 Value* IrEmitter::Addr(const FuncNameMethodSel& sel) {
   return AddrOfField(builder_.CreateLoad(Addr(sel.lhs)),
                      symbols_[sel.name.name]);
+}
+
+void IrEmitter::Emit(const DoStat& do_stat) {
+  EnterScope();
+  Emit(do_stat.body);
+  LeaveScope();
 }
 }  // namespace
 

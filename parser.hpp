@@ -56,6 +56,7 @@ struct FieldSel;
 struct MethodCall;
 struct FuncNameFieldSel;
 struct FuncNameMethodSel;
+struct DoStat;
 
 struct Nil {};
 
@@ -93,7 +94,8 @@ struct Statement {
                std::reference_wrapper<const FuncStat>,
                std::reference_wrapper<const RetStat>,
                std::reference_wrapper<const LocalStat>,
-               std::reference_wrapper<const LocalFunc>>
+               std::reference_wrapper<const LocalFunc>,
+               std::reference_wrapper<const DoStat>>
       stat;
 };
 
@@ -279,13 +281,17 @@ struct FuncNameMethodSel {
   Symbol name;
 };
 
+struct DoStat {
+  const StatList& body;
+};
+
 using Node =
     std::variant<Nil, StatList, Statement, IfStat, TestThenBlock, Expr,
                  SimpleExpr, Unop, Binop, SuffixedExp, PrimaryExp, ExprStat,
                  Assignment, FuncCall, ExpList, ForStat, Constructor, Field,
                  Index, FuncStat, FuncName, RetStat, LocalStat, LocalFunc,
                  FuncBody, FuncExpr, FieldSel, MethodCall, FuncNameFieldSel,
-                 FuncNameMethodSel>;
+                 FuncNameMethodSel, DoStat>;
 }  // namespace node
 
 class Parser {
@@ -361,6 +367,7 @@ class Parser {
   node::MethodCall& ParserMethodCall(node::SuffixedExp& lhs);
   node::FuncNameFieldSel& ParseFuncNameFieldSel(node::FuncName& lhs);
   node::FuncNameMethodSel& ParseFuncNameMethodSel(node::FuncName& lhs);
+  node::DoStat& ParseDoStat();
   bool is_block_follow() const noexcept;
   bool is_unop() const noexcept;
   node::Unop::Type unop_type() const noexcept;
