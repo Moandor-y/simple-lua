@@ -46,6 +46,7 @@ using node::LiteralInt;
 using node::LiteralString;
 using node::LocalFunc;
 using node::LocalStat;
+using node::MethodCall;
 using node::Nil;
 using node::PrimaryExp;
 using node::RetStat;
@@ -65,7 +66,8 @@ ExpType SuffixedExp::type() const noexcept {
         using T = decay_t<decltype(ref.get())>;
         if constexpr (is_same_v<T, PrimaryExp>) {
           return ref.get().type();
-        } else if constexpr (is_same_v<T, FuncCall>) {
+        } else if constexpr (is_same_v<T, FuncCall> ||
+                             is_same_v<T, MethodCall>) {
           return ExpType::kRight;
         } else if constexpr (is_same_v<T, Index> || is_same_v<T, FieldSel>) {
           return ExpType::kLeft;
@@ -284,13 +286,16 @@ TestThenBlock& Parser::ParseTestThenBlock() {
 }
 
 SuffixedExp& Parser::ParseSuffixedExp() {
-  // SuffixedExp -> FieldSel | Index | PrimaryExp | FuncCall
+  // SuffixedExp -> FieldSel | Index | PrimaryExp | FuncCall | MethodCall
   nodes_.emplace_back(SuffixedExp{ParsePrimaryExp()});
   while (true) {
     SuffixedExp& expr = get<SuffixedExp>(nodes_.back());
     switch (current().type) {
       case Lexeme::Type::kDot:
         nodes_.emplace_back(SuffixedExp{ParseFieldSel(expr)});
+        break;
+      case Lexeme::Type::kColon:
+        nodes_.emplace_back(SuffixedExp{ParserMethodCall(expr)});
         break;
       case Lexeme::Type::kLeftSquareBracket:
         nodes_.emplace_back(SuffixedExp{ParseIndex(expr)});
@@ -538,6 +543,24 @@ FieldSel& Parser::ParseFieldSel(SuffixedExp& lhs) {
   nodes_.emplace_back(FieldSel{lhs, Symbol{current().data.symbol_name}});
   Next();
   return get<FieldSel>(nodes_.back());
+}
+
+MethodCall& Parser::ParserMethodCall(SuffixedExp& lhs) {
+  // MethodCall -> SuffixedExp ':' symbol '(' [ ExpList ] ')'
+  Match(Lexeme::Type::kColon);
+  if (current().type != Lexeme::Type::kSymbol) {
+    SyntaxError();
+  }
+  Symbol method{current().data.symbol_name};
+  Next();
+  Match(Lexeme::Type::kLeftBracket);
+  optional<reference_wrapper<const ExpList>> args;
+  if (current().type != Lexeme::Type::kRightBracket) {
+    args = ParseExpList();
+  }
+  Match(Lexeme::Type::kRightBracket);
+  nodes_.emplace_back(MethodCall{lhs, method, args});
+  return get<MethodCall>(nodes_.back());
 }
 
 bool Parser::is_block_follow() const noexcept {

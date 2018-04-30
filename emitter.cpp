@@ -118,6 +118,7 @@ using node::LiteralInt;
 using node::LiteralString;
 using node::LocalFunc;
 using node::LocalStat;
+using node::MethodCall;
 using node::Nil;
 using node::PrimaryExp;
 using node::RetStat;
@@ -233,15 +234,18 @@ class IrEmitter {
   Value* Eval(const Index&);
   Value* Eval(const FuncExpr&);
   Value* Eval(const FieldSel&);
+  Value* Eval(const MethodCall&);
   Value* EvalArith(Value*, Value*, ArithOp);
   Value* EvalLogic(const Expr&, const Expr&, LogicOp);
   Value* EvalIntArith(Value*, Value*, ArithOp);
   Value* EvalFloatArith(Value*, Value*, ArithOp);
+  Value* EvalFuncCall(Value* func, vector<Value*>);
   Value* Addr(const SuffixedExp&, bool is_local);
   Value* Addr(const PrimaryExp&, bool is_local);
   Value* Addr(const Index&);
   Value* Addr(const FieldSel&);
   Value* Addr(Symbol, bool is_local);
+  Value* AddrOfField(Value* lhs, const string& name);
   Value* ToBool(Value*);
   Value* LookupSymbol(const string&, bool is_local);
   Value* ExtractType(Value*);
@@ -564,89 +568,13 @@ void IrEmitter::Emit(const ExprStat& stat) {
 
 Value* IrEmitter::Eval(const FuncCall& func_call) {
   Value* func = Eval(func_call.func);
-  Value* is_func = builder_.CreateICmpEQ(ExtractType(func),
-                                         builder_.getInt64(kSluaValueFunction));
-  Value* is_builtin_func = builder_.CreateICmpEQ(
-      ExtractType(func), builder_.getInt64(kSluaValueBuiltinFunction));
-
   vector<Value*> args;
   if (func_call.args.has_value()) {
     for (const Expr& arg : func_call.args.value().get().exps) {
       args.push_back(Eval(arg));
     }
   }
-
-  Value* result_ptr = builder_.CreateAlloca(value_type_);
-
-  BasicBlock* then_block = CreateBlock("call_check_then");
-  BasicBlock* post_block = CreateBlock("call_check_post");
-  builder_.CreateCondBr(
-      builder_.CreateNot(builder_.CreateOr(is_func, is_builtin_func)),
-      then_block, post_block);
-
-  builder_.SetInsertPoint(then_block);
-  builder_.CreateCall(func_runtime_error_, builder_.CreateGlobalStringPtr(
-                                               "Error: value not callable"));
-  builder_.CreateUnreachable();
-
-  builder_.SetInsertPoint(post_block);
-  then_block = CreateBlock("call_type_then");
-  post_block = CreateBlock("call_type_post");
-  BasicBlock* else_block = CreateBlock("func_type_else");
-  builder_.CreateCondBr(is_func, then_block, else_block);
-
-  builder_.SetInsertPoint(then_block);
-  EnterScope();
-  Value* arg_table_ptr = LookupSymbol("_temp_" + to_string(temp_name_), true);
-  ++temp_name_;
-  builder_.CreateStore(builder_.getInt64(kSluaValueTable),
-                       PointerToType(arg_table_ptr));
-  builder_.CreateStore(
-      builder_.CreatePtrToInt(builder_.CreateCall(func_table_new_),
-                              builder_.getInt64Ty()),
-      PointerToValue(arg_table_ptr));
-  Value* arg_table = builder_.CreateLoad(arg_table_ptr);
-  for (index i = 0; i < static_cast<index>(args.size()); ++i) {
-    Value* index_ptr = builder_.CreateAlloca(value_type_);
-    builder_.CreateStore(builder_.getInt64(kSluaValueInteger),
-                         PointerToType(index_ptr));
-    builder_.CreateStore(builder_.getInt64(i + 1), PointerToValue(index_ptr));
-    Value* arg_ptr = builder_.CreateCall(
-        func_table_access_, {arg_table, builder_.CreateLoad(index_ptr)});
-    builder_.CreateStore(args[i], arg_ptr);
-  }
-  Value* result = builder_.CreateCall(
-      FunctionType::get(value_type_, {value_type_}, false),
-      builder_.CreateIntToPtr(ExtractValue(func),
-                              PointerType::getUnqual(FunctionType::get(
-                                  value_type_, {value_type_}, false))),
-      {arg_table});
-  builder_.CreateStore(result, result_ptr);
-  LeaveScope();
-  builder_.CreateBr(post_block);
-
-  builder_.SetInsertPoint(else_block);
-
-  args.insert(args.begin(), nullptr);
-  args.insert(args.begin(),
-              builder_.CreateIntToPtr(
-                  ExtractValue(func),
-                  PointerType::getInt8PtrTy(builder_.getContext())));
-  if (func_call.args.has_value()) {
-    args[1] = builder_.getInt32(func_call.args.value().get().exps.size());
-  } else {
-    args[1] = builder_.getInt32(0);
-  }
-  result = builder_.CreateCall(func_invoke_builtin_, args);
-  builder_.CreateStore(result, result_ptr);
-  builder_.CreateBr(post_block);
-
-  builder_.SetInsertPoint(post_block);
-  result = builder_.CreateLoad(result_ptr);
-  Value* temp_ptr = LookupSymbol("_temp_" + to_string(temp_name_), true);
-  ++temp_name_;
-  builder_.CreateStore(result, temp_ptr);
-  return result;
+  return EvalFuncCall(func, move(args));
 }
 
 void IrEmitter::Emit(const Assignment& assignment) {
@@ -668,6 +596,9 @@ Value* IrEmitter::Addr(const SuffixedExp& expr, bool is_local) {
           },
           [](reference_wrapper<const FuncCall>) -> Value* {
             throw ParserException{"Cannot get address of function call"};
+          },
+          [](reference_wrapper<const MethodCall>) -> Value* {
+            throw ParserException{"Cannot get address of method call"};
           },
       },
       expr.expr);
@@ -1359,9 +1290,98 @@ Value* IrEmitter::Eval(const FieldSel& field_sel) {
 }
 
 Value* IrEmitter::Addr(const FieldSel& field_sel) {
-  Value* lhs = Eval(field_sel.lhs);
-  Value* rhs_name = GetGlobalString(symbols_[field_sel.rhs.name]);
+  return AddrOfField(Eval(field_sel.lhs), symbols_[field_sel.rhs.name]);
+}
+
+Value* IrEmitter::EvalFuncCall(Value* func, vector<Value*> args) {
+  Value* is_func = builder_.CreateICmpEQ(ExtractType(func),
+                                         builder_.getInt64(kSluaValueFunction));
+  Value* is_builtin_func = builder_.CreateICmpEQ(
+      ExtractType(func), builder_.getInt64(kSluaValueBuiltinFunction));
+  Value* result_ptr = builder_.CreateAlloca(value_type_);
+
+  BasicBlock* then_block = CreateBlock("call_check_then");
+  BasicBlock* post_block = CreateBlock("call_check_post");
+  builder_.CreateCondBr(
+      builder_.CreateNot(builder_.CreateOr(is_func, is_builtin_func)),
+      then_block, post_block);
+
+  builder_.SetInsertPoint(then_block);
+  builder_.CreateCall(func_runtime_error_, builder_.CreateGlobalStringPtr(
+                                               "Error: value not callable"));
+  builder_.CreateUnreachable();
+
+  builder_.SetInsertPoint(post_block);
+  then_block = CreateBlock("call_type_then");
+  post_block = CreateBlock("call_type_post");
+  BasicBlock* else_block = CreateBlock("func_type_else");
+  builder_.CreateCondBr(is_func, then_block, else_block);
+
+  builder_.SetInsertPoint(then_block);
+  EnterScope();
+  Value* arg_table_ptr = LookupSymbol("_temp_" + to_string(temp_name_), true);
+  ++temp_name_;
+  builder_.CreateStore(builder_.getInt64(kSluaValueTable),
+                       PointerToType(arg_table_ptr));
+  builder_.CreateStore(
+      builder_.CreatePtrToInt(builder_.CreateCall(func_table_new_),
+                              builder_.getInt64Ty()),
+      PointerToValue(arg_table_ptr));
+  Value* arg_table = builder_.CreateLoad(arg_table_ptr);
+  for (index i = 0; i < static_cast<index>(args.size()); ++i) {
+    Value* index_ptr = builder_.CreateAlloca(value_type_);
+    builder_.CreateStore(builder_.getInt64(kSluaValueInteger),
+                         PointerToType(index_ptr));
+    builder_.CreateStore(builder_.getInt64(i + 1), PointerToValue(index_ptr));
+    Value* arg_ptr = builder_.CreateCall(
+        func_table_access_, {arg_table, builder_.CreateLoad(index_ptr)});
+    builder_.CreateStore(args[i], arg_ptr);
+  }
+  Value* result = builder_.CreateCall(
+      FunctionType::get(value_type_, {value_type_}, false),
+      builder_.CreateIntToPtr(ExtractValue(func),
+                              PointerType::getUnqual(FunctionType::get(
+                                  value_type_, {value_type_}, false))),
+      {arg_table});
+  builder_.CreateStore(result, result_ptr);
+  LeaveScope();
+  builder_.CreateBr(post_block);
+
+  builder_.SetInsertPoint(else_block);
+
+  args.insert(args.begin(), builder_.getInt32(args.size()));
+  args.insert(args.begin(),
+              builder_.CreateIntToPtr(
+                  ExtractValue(func),
+                  PointerType::getInt8PtrTy(builder_.getContext())));
+  result = builder_.CreateCall(func_invoke_builtin_, args);
+  builder_.CreateStore(result, result_ptr);
+  builder_.CreateBr(post_block);
+
+  builder_.SetInsertPoint(post_block);
+  result = builder_.CreateLoad(result_ptr);
+  Value* temp_ptr = LookupSymbol("_temp_" + to_string(temp_name_), true);
+  ++temp_name_;
+  builder_.CreateStore(result, temp_ptr);
+  return result;
+}
+
+Value* IrEmitter::AddrOfField(Value* lhs, const string& name) {
+  Value* rhs_name = GetGlobalString(name);
   return builder_.CreateCall(func_table_access_, {lhs, rhs_name});
+}
+
+Value* IrEmitter::Eval(const MethodCall& method_call) {
+  Value* lhs = Eval(method_call.lhs);
+  Value* func_addr = AddrOfField(lhs, symbols_[method_call.method.name]);
+  Value* func = builder_.CreateLoad(func_addr);
+  vector<Value*> args{lhs};
+  if (method_call.args.has_value()) {
+    for (const Expr& arg : method_call.args.value().get().exps) {
+      args.push_back(Eval(arg));
+    }
+  }
+  return EvalFuncCall(func, move(args));
 }
 }  // namespace
 
