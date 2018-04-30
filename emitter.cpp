@@ -109,6 +109,8 @@ using node::FuncBody;
 using node::FuncCall;
 using node::FuncExpr;
 using node::FuncName;
+using node::FuncNameFieldSel;
+using node::FuncNameMethodSel;
 using node::FuncStat;
 using node::IfStat;
 using node::Index;
@@ -219,7 +221,7 @@ class IrEmitter {
   void Emit(const RetStat&);
   void Emit(const LocalStat&);
   void Emit(const LocalFunc&);
-  void Emit(const FuncBody&, Function*);
+  void Emit(const FuncBody&, Function*, bool is_method);
   void EmitAssignment(Value* addr, Value* value);
   void EmitBreak();
   Value* Eval(const Expr&);
@@ -244,7 +246,11 @@ class IrEmitter {
   Value* Addr(const PrimaryExp&, bool is_local);
   Value* Addr(const Index&);
   Value* Addr(const FieldSel&);
+  Value* Addr(const FuncName&);
+  Value* Addr(const FuncNameFieldSel&);
+  Value* Addr(const FuncNameMethodSel&);
   Value* Addr(Symbol, bool is_local);
+  Value* Addr(const string& name, bool is_local);
   Value* AddrOfField(Value* lhs, const string& name);
   Value* ToBool(Value*);
   Value* LookupSymbol(const string&, bool is_local);
@@ -609,7 +615,11 @@ Value* IrEmitter::Addr(const PrimaryExp& expr, bool is_local) {
 }
 
 Value* IrEmitter::Addr(Symbol name, bool is_local) {
-  return LookupSymbol(symbols_[name.name], is_local);
+  return Addr(symbols_[name.name], is_local);
+}
+
+Value* IrEmitter::Addr(const string& name, bool is_local) {
+  return LookupSymbol(name, is_local);
 }
 
 Value* IrEmitter::ToBool(Value* value) {
@@ -1140,9 +1150,11 @@ Value* IrEmitter::PointerToTableArray(Value* table_ptr) {
 }
 
 void IrEmitter::Emit(const FuncStat& func_stat) {
-  Value* ptr = Addr(func_stat.name.name, false);
+  Value* ptr = Addr(func_stat.name);
   Function* func = CreateFunc(ptr);
-  Emit(func_stat.body, func);
+  Emit(func_stat.body, func,
+       holds_alternative<reference_wrapper<const FuncNameMethodSel>>(
+           func_stat.name.name));
 }
 
 void IrEmitter::Emit(const RetStat& ret_stat) {
@@ -1193,7 +1205,7 @@ Value* IrEmitter::EvalLogic(const Expr& lhs_expr, const Expr& rhs_expr,
   return builder_.CreateLoad(result_ptr);
 }
 
-void IrEmitter::Emit(const FuncBody& body, Function* func) {
+void IrEmitter::Emit(const FuncBody& body, Function* func, bool is_method) {
   BasicBlock* entry_block =
       BasicBlock::Create(builder_.getContext(), "entry", func);
   BasicBlock* outer_block = builder_.GetInsertBlock();
@@ -1202,8 +1214,17 @@ void IrEmitter::Emit(const FuncBody& body, Function* func) {
   Function* outer_func = curr_func_;
   curr_func_ = func;
   EnterScope();
-  for (index i = 0; i < static_cast<index>(body.params.size()); ++i) {
-    Value* ptr = Addr(body.params[i], true);
+  index param_count = body.params.size();
+  if (is_method) {
+    ++param_count;
+  }
+  for (index i = 0; i < param_count; ++i) {
+    Value* ptr;
+    if (is_method && i == 0) {
+      ptr = Addr("self", true);
+    } else {
+      ptr = Addr(body.params[i], true);
+    }
     Value* index = ConstantStruct::get(
         value_type_,
         {builder_.getInt64(kSluaValueInteger), builder_.getInt64(i + 1)});
@@ -1229,13 +1250,13 @@ void IrEmitter::Emit(const LocalStat& stat) {
 void IrEmitter::Emit(const LocalFunc& local_func) {
   Value* ptr = Addr(local_func.name, true);
   Function* func = CreateFunc(ptr);
-  Emit(local_func.body, func);
+  Emit(local_func.body, func, false);
 }
 
 Value* IrEmitter::Eval(const FuncExpr& func_expr) {
   Value* ptr = builder_.CreateAlloca(value_type_);
   Function* func = CreateFunc(ptr);
-  Emit(func_expr.body, func);
+  Emit(func_expr.body, func, false);
   return builder_.CreateLoad(ptr);
 }
 
@@ -1382,6 +1403,25 @@ Value* IrEmitter::Eval(const MethodCall& method_call) {
     }
   }
   return EvalFuncCall(func, move(args));
+}
+
+Value* IrEmitter::Addr(const FuncName& func_name) {
+  visit(
+      Overloaded{
+          [this](const auto& ref) -> Value* { return Addr(ref.get()); },
+          [this](const Symbol& name) -> Value* { return Addr(name, false); },
+      },
+      func_name.name);
+}
+
+Value* IrEmitter::Addr(const FuncNameFieldSel& sel) {
+  return AddrOfField(builder_.CreateLoad(Addr(sel.lhs)),
+                     symbols_[sel.name.name]);
+}
+
+Value* IrEmitter::Addr(const FuncNameMethodSel& sel) {
+  return AddrOfField(builder_.CreateLoad(Addr(sel.lhs)),
+                     symbols_[sel.name.name]);
 }
 }  // namespace
 

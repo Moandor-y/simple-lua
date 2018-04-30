@@ -37,6 +37,8 @@ using node::FuncBody;
 using node::FuncCall;
 using node::FuncExpr;
 using node::FuncName;
+using node::FuncNameFieldSel;
+using node::FuncNameMethodSel;
 using node::FuncStat;
 using node::IfStat;
 using node::Index;
@@ -453,13 +455,21 @@ FuncStat& Parser::ParseFuncStat() {
 }
 
 FuncName& Parser::ParseFuncName() {
-  // FuncName -> symbol
-  if (current().type == Lexeme::Type::kSymbol) {
-    nodes_.emplace_back(FuncName{Symbol{current().data.symbol_name}});
-    Next();
-    return get<FuncName>(nodes_.back());
+  // FuncName -> symbol { '.' symbol } [ ':' symbol ]
+  if (current().type != Lexeme::Type::kSymbol) {
+    SyntaxError();
   }
-  SyntaxError();
+  nodes_.emplace_back(FuncName{Symbol{current().data.symbol_name}});
+  Next();
+  while (current().type == Lexeme::Type::kDot) {
+    FuncName& lhs = get<FuncName>(nodes_.back());
+    nodes_.emplace_back(FuncName{ParseFuncNameFieldSel(lhs)});
+  }
+  if (current().type == Lexeme::Type::kColon) {
+    FuncName& lhs = get<FuncName>(nodes_.back());
+    nodes_.emplace_back(FuncName{ParseFuncNameMethodSel(lhs)});
+  }
+  return get<FuncName>(nodes_.back());
 }
 
 RetStat& Parser::ParseRetStat() {
@@ -561,6 +571,28 @@ MethodCall& Parser::ParserMethodCall(SuffixedExp& lhs) {
   Match(Lexeme::Type::kRightBracket);
   nodes_.emplace_back(MethodCall{lhs, method, args});
   return get<MethodCall>(nodes_.back());
+}
+
+FuncNameFieldSel& Parser::ParseFuncNameFieldSel(FuncName& lhs) {
+  Match(Lexeme::Type::kDot);
+  if (current().type != Lexeme::Type::kSymbol) {
+    SyntaxError();
+  }
+  nodes_.emplace_back(
+      FuncNameFieldSel{lhs, Symbol{current().data.symbol_name}});
+  Next();
+  return get<FuncNameFieldSel>(nodes_.back());
+}
+
+FuncNameMethodSel& Parser::ParseFuncNameMethodSel(FuncName& lhs) {
+  Match(Lexeme::Type::kColon);
+  if (current().type != Lexeme::Type::kSymbol) {
+    SyntaxError();
+  }
+  nodes_.emplace_back(
+      FuncNameMethodSel{lhs, Symbol{current().data.symbol_name}});
+  Next();
+  return get<FuncNameMethodSel>(nodes_.back());
 }
 
 bool Parser::is_block_follow() const noexcept {

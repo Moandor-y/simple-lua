@@ -54,6 +54,8 @@ struct FuncBody;
 struct FuncExpr;
 struct FieldSel;
 struct MethodCall;
+struct FuncNameFieldSel;
+struct FuncNameMethodSel;
 
 struct Nil {};
 
@@ -228,7 +230,9 @@ struct FuncStat {
 };
 
 struct FuncName {
-  Symbol name;
+  std::variant<std::reference_wrapper<const FuncNameFieldSel>,
+               std::reference_wrapper<const FuncNameMethodSel>, Symbol>
+      name;
 };
 
 struct RetStat {
@@ -265,12 +269,23 @@ struct MethodCall {
   std::optional<std::reference_wrapper<const ExpList>> args;
 };
 
+struct FuncNameFieldSel {
+  const FuncName& lhs;
+  Symbol name;
+};
+
+struct FuncNameMethodSel {
+  const FuncName& lhs;
+  Symbol name;
+};
+
 using Node =
     std::variant<Nil, StatList, Statement, IfStat, TestThenBlock, Expr,
                  SimpleExpr, Unop, Binop, SuffixedExp, PrimaryExp, ExprStat,
                  Assignment, FuncCall, ExpList, ForStat, Constructor, Field,
                  Index, FuncStat, FuncName, RetStat, LocalStat, LocalFunc,
-                 FuncBody, FuncExpr, FieldSel, MethodCall>;
+                 FuncBody, FuncExpr, FieldSel, MethodCall, FuncNameFieldSel,
+                 FuncNameMethodSel>;
 }  // namespace node
 
 class Parser {
@@ -344,6 +359,8 @@ class Parser {
   node::FuncExpr& ParseFuncExpr();
   node::FieldSel& ParseFieldSel(node::SuffixedExp& lhs);
   node::MethodCall& ParserMethodCall(node::SuffixedExp& lhs);
+  node::FuncNameFieldSel& ParseFuncNameFieldSel(node::FuncName& lhs);
+  node::FuncNameMethodSel& ParseFuncNameMethodSel(node::FuncName& lhs);
   bool is_block_follow() const noexcept;
   bool is_unop() const noexcept;
   node::Unop::Type unop_type() const noexcept;
