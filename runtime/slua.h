@@ -26,7 +26,6 @@ struct SluaValue {
 };
 
 struct SluaTable {
-  int64_t ref_count;
   int64_t array_size;
   int64_t array_capacity;
   SluaValue* array_ptr;

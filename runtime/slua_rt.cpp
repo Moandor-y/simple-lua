@@ -73,15 +73,9 @@ string ToString(SluaValue val) {
 }
 
 char* NewString(const string& str) noexcept {
-  using gsl::index;
-  unsigned char* storage = new unsigned char[str.size() + sizeof(int64_t) + 1];
-  int64_t count = 1;
-  memcpy(storage, &count, sizeof(int64_t));
-  memcpy(storage + sizeof(int64_t), str.c_str(), str.size() + 1);
-#ifndef NDEBUG
-  cout << "String allocated: " << static_cast<const void*>(storage) << '\n';
-#endif
-  return static_cast<char*>(static_cast<void*>(storage + sizeof(int64_t)));
+  char* storage = new char[str.size() + 1];
+  memcpy(storage, str.c_str(), str.size() + 1);
+  return storage;
 }
 }  // namespace
 
@@ -224,44 +218,6 @@ SluaTable* slua_table_new() noexcept {
   return ptr;
 }
 
-void slua_table_ref_inc(SluaTable* table) noexcept {
-  ++table->ref_count;
-#ifndef NDEBUG
-  cout << "Table " << table << " ref_count increased to: " << table->ref_count
-       << '\n';
-#endif
-}
-
-void slua_table_ref_dec(SluaTable* table) noexcept {
-  --table->ref_count;
-#ifndef NDEBUG
-  cout << "Table " << table << " ref_count decreased to: " << table->ref_count
-       << '\n';
-#endif
-  if (table->ref_count == 0) {
-#ifndef NDEBUG
-    cout << "Table deallocated: " << table << '\n';
-#endif
-    for (SluaValue& value : make_span(table->array_ptr, table->array_size)) {
-      if (value.type == kSluaValueTable) {
-        slua_table_ref_dec(static_cast<SluaTable*>(value.value.address));
-      }
-    }
-    TableHash& table_hash = *static_cast<TableHash*>(table->hash_ptr);
-    for (auto& elem : table_hash) {
-      SluaValue& value = elem.second;
-      if (value.type == kSluaValueTable) {
-        slua_table_ref_dec(static_cast<SluaTable*>(value.value.address));
-      }
-    }
-    delete[] table->array_ptr;
-    delete &table_hash;
-    auto iter = table_iters.find(table);
-    tables.erase(iter->second);
-    table_iters.erase(iter);
-  }
-}
-
 void slua_table_array_grow(SluaTable* table) noexcept {
   span<SluaValue> values{table->array_ptr, table->array_size};
   if (table->array_capacity == 0) {
@@ -299,38 +255,6 @@ SluaValue* slua_table_access(SluaValue lhs, SluaValue rhs) noexcept {
 
   TableHash& table_hash = *static_cast<TableHash*>(table->hash_ptr);
   return &table_hash[rhs];
-}
-
-void slua_string_ref_inc(char* str) noexcept {
-  unsigned char* storage =
-      static_cast<unsigned char*>(static_cast<void*>(str)) - sizeof(int64_t);
-  int64_t count;
-  memcpy(&count, storage, sizeof(int64_t));
-  ++count;
-  memcpy(storage, &count, sizeof(int64_t));
-#ifndef NDEBUG
-  cout << "String " << static_cast<const void*>(storage)
-       << " ref count increased to: " << count << '\n';
-#endif
-}
-
-void slua_string_ref_dec(char* str) noexcept {
-  unsigned char* storage =
-      static_cast<unsigned char*>(static_cast<void*>(str)) - sizeof(int64_t);
-  int64_t count;
-  memcpy(&count, storage, sizeof(int64_t));
-  --count;
-  memcpy(storage, &count, sizeof(int64_t));
-#ifndef NDEBUG
-  cout << "String " << static_cast<const void*>(storage)
-       << " ref count decreased to: " << count << '\n';
-#endif
-  if (count == 0) {
-#ifndef NDEBUG
-    cout << "String deallocated: " << static_cast<const void*>(storage) << '\n';
-#endif
-    delete[] storage;
-  }
 }
 }  // extern "C"
 

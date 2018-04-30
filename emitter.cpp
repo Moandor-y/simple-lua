@@ -187,12 +187,8 @@ class IrEmitter {
   Function* func_runtime_error_;   // void f(const char*)
   Function* func_invoke_builtin_;  // value f(const char* name, int count, ...)
   Function* func_table_new_;       // table* f()
-  Function* func_table_ref_inc_;   // void f(table*)
-  Function* func_table_ref_dec_;   // void f(table*)
   Function* func_table_array_grow_;  // void f(table*)
   Function* func_table_access_;      // value* f(value, value)
-  Function* func_string_ref_inc_;    // void f(char*)
-  Function* func_string_ref_dec_;    // void f(char*)
 
   Function* func_fmod_;   // double f(double, double)
   Function* func_floor_;  // double f(double)
@@ -254,12 +250,7 @@ class IrEmitter {
   Value* PointerToType(Value* ptr);
   Value* ValueToFloat(Value*);
   Value* CallOverloadedOp(Value*, Value*, ArithOp);
-  void EmitDestroyScope(SymbolTable&);
   BasicBlock* CreateBlock(const string& name);
-  void TableRefInc(Value*);
-  void TableRefDec(Value*);
-  void StringRefInc(Value*);
-  void StringRefDec(Value*);
   Value* GetTablePtr(Value*);
   Value* GetStringPtr(Value*);
   void TableArrayAppend(Value* value, Value* table_ptr);
@@ -279,7 +270,6 @@ IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
           {builder.getInt64Ty(), builder.getInt64Ty()}, "val_t")},
       table_type_{StructType::create(
           {
-              builder.getInt64Ty(),                         // ref_count
               builder.getInt64Ty(),                         // array_size
               builder.getInt64Ty(),                         // array_capacity
               PointerType::getUnqual(value_type_),          // array_ptr
@@ -344,14 +334,6 @@ IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
       func_table_new_{Function::Create(
           FunctionType::get(PointerType::getUnqual(table_type_), {}, false),
           Function::ExternalLinkage, "slua_table_new", module)},
-      func_table_ref_inc_{Function::Create(
-          FunctionType::get(builder.getVoidTy(),
-                            {PointerType::getUnqual(table_type_)}, false),
-          Function::ExternalLinkage, "slua_table_ref_inc", module)},
-      func_table_ref_dec_{Function::Create(
-          FunctionType::get(builder.getVoidTy(),
-                            {PointerType::getUnqual(table_type_)}, false),
-          Function::ExternalLinkage, "slua_table_ref_dec", module)},
 
       func_table_array_grow_{Function::Create(
           FunctionType::get(builder.getVoidTy(),
@@ -362,15 +344,6 @@ IrEmitter::IrEmitter(IRBuilder<>& builder, Module* module,
           FunctionType::get(PointerType::getUnqual(value_type_),
                             {value_type_, value_type_}, false),
           Function::ExternalLinkage, "slua_table_access", module)},
-
-      func_string_ref_inc_{Function::Create(
-          FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()},
-                            false),
-          Function::ExternalLinkage, "slua_string_ref_inc", module)},
-      func_string_ref_dec_{Function::Create(
-          FunctionType::get(builder.getVoidTy(), {builder.getInt8PtrTy()},
-                            false),
-          Function::ExternalLinkage, "slua_string_ref_dec", module)},
 
       func_fmod_{Function::Create(
           FunctionType::get(builder.getDoubleTy(),
@@ -642,7 +615,6 @@ Value* IrEmitter::Eval(const FuncCall& func_call) {
         func_table_access_, {arg_table, builder_.CreateLoad(index_ptr)});
     builder_.CreateStore(args[i], arg_ptr);
   }
-  TableRefInc(arg_table);
   Value* result = builder_.CreateCall(
       FunctionType::get(value_type_, {value_type_}, false),
       builder_.CreateIntToPtr(ExtractValue(func),
@@ -684,57 +656,7 @@ void IrEmitter::Emit(const Assignment& assignment) {
 }
 
 void IrEmitter::EmitAssignment(Value* addr, Value* value) {
-  Value* tag_table = builder_.getInt64(kSluaValueTable);
-  Value* tag_string = builder_.getInt64(kSluaValueString);
-
-  BasicBlock* then_block = CreateBlock("assign_lhs_table_then");
-  BasicBlock* post_block = CreateBlock("assign_lhs_table_post");
-
-  Value* lhs = builder_.CreateLoad(addr);
-  Value* lhs_type = ExtractType(lhs);
-  Value* cmp = builder_.CreateICmpEQ(lhs_type, tag_table);
-  builder_.CreateCondBr(cmp, then_block, post_block);
-
-  builder_.SetInsertPoint(then_block);
-  TableRefDec(lhs);
-  builder_.CreateBr(post_block);
-
-  builder_.SetInsertPoint(post_block);
-  then_block = CreateBlock("assign_lhs_string_then");
-  post_block = CreateBlock("assign_lhs_string_post");
-  cmp = builder_.CreateICmpEQ(lhs_type, tag_string);
-  builder_.CreateCondBr(cmp, then_block, post_block);
-
-  builder_.SetInsertPoint(then_block);
-  StringRefDec(lhs);
-  builder_.CreateBr(post_block);
-
-  builder_.SetInsertPoint(post_block);
   builder_.CreateStore(value, addr);
-
-  then_block = CreateBlock("assign_rhs_table_then");
-  post_block = CreateBlock("assign_rhs_table_post");
-
-  Value* rhs_type = ExtractType(value);
-  cmp = builder_.CreateICmpEQ(rhs_type, tag_table);
-  builder_.CreateCondBr(cmp, then_block, post_block);
-
-  builder_.SetInsertPoint(then_block);
-  TableRefInc(value);
-  builder_.CreateBr(post_block);
-
-  builder_.SetInsertPoint(post_block);
-  then_block = CreateBlock("assign_rhs_str_then");
-  post_block = CreateBlock("assign_rhs_str_post");
-
-  cmp = builder_.CreateICmpEQ(rhs_type, tag_string);
-  builder_.CreateCondBr(cmp, then_block, post_block);
-
-  builder_.SetInsertPoint(then_block);
-  StringRefInc(value);
-  builder_.CreateBr(post_block);
-
-  builder_.SetInsertPoint(post_block);
 }
 
 Value* IrEmitter::Addr(const SuffixedExp& expr, bool is_local) {
@@ -812,42 +734,8 @@ void IrEmitter::LeaveScope() {
   if (symbol_table_->next == nullptr) {
     throw runtime_error{"Cannot leave global scope"};
   }
-
-  EmitDestroyScope(*symbol_table_);
-
   unique_ptr<SymbolTable> table = move(symbol_table_->next);
   symbol_table_ = move(table);
-}
-
-void IrEmitter::EmitDestroyScope(SymbolTable& symbol_table) {
-  for (const auto& symbol : symbol_table.addr) {
-    Value* value_ptr = symbol.second;
-    Value* value = builder_.CreateLoad(value_ptr);
-    Value* type = ExtractType(value);
-
-    BasicBlock* then_block = CreateBlock("leave_is_table_then");
-    BasicBlock* post_block = CreateBlock("leave_is_table_post");
-
-    Value* cmp =
-        builder_.CreateICmpEQ(type, builder_.getInt64(kSluaValueTable));
-    builder_.CreateCondBr(cmp, then_block, post_block);
-
-    builder_.SetInsertPoint(then_block);
-    TableRefDec(value);
-    builder_.CreateBr(post_block);
-
-    builder_.SetInsertPoint(post_block);
-    then_block = CreateBlock("leave_is_string_then");
-    post_block = CreateBlock("leave_is_string_post");
-    cmp = builder_.CreateICmpEQ(type, builder_.getInt64(kSluaValueString));
-    builder_.CreateCondBr(cmp, then_block, post_block);
-
-    builder_.SetInsertPoint(then_block);
-    StringRefDec(value);
-    builder_.CreateBr(post_block);
-
-    builder_.SetInsertPoint(post_block);
-  }
 }
 
 void IrEmitter::Emit(const ForStat& for_stat) {
@@ -1243,22 +1131,6 @@ Value* IrEmitter::CallOverloadedOp(Value* lhs, Value* rhs, ArithOp op) {
   }
 }
 
-void IrEmitter::TableRefInc(Value* value) {
-  builder_.CreateCall(func_table_ref_inc_, {GetTablePtr(value)});
-}
-
-void IrEmitter::TableRefDec(Value* value) {
-  builder_.CreateCall(func_table_ref_dec_, {GetTablePtr(value)});
-}
-
-void IrEmitter::StringRefInc(Value* value) {
-  builder_.CreateCall(func_string_ref_inc_, {GetStringPtr(value)});
-}
-
-void IrEmitter::StringRefDec(Value* value) {
-  builder_.CreateCall(func_string_ref_dec_, {GetStringPtr(value)});
-}
-
 Value* IrEmitter::GetTablePtr(Value* value) {
   return builder_.CreateIntToPtr(ExtractValue(value),
                                  PointerType::getUnqual(table_type_));
@@ -1278,7 +1150,6 @@ Value* IrEmitter::Eval(const Constructor& constructor) {
       builder_.CreatePtrToInt(table_ptr, builder_.getInt64Ty()),
       PointerToValue(value_ptr));
   Value* value = builder_.CreateLoad(value_ptr);
-  TableRefInc(value);
 
   for (const Field& field : constructor.fields) {
     TableArrayAppend(Eval(field), table_ptr);
@@ -1310,30 +1181,6 @@ void IrEmitter::TableArrayAppend(Value* value, Value* table_ptr) {
 
   size = builder_.CreateAdd(size, builder_.getInt64(1));
   builder_.CreateStore(size, size_ptr);
-  Value* value_type = ExtractType(value);
-
-  BasicBlock* is_table_block = CreateBlock("array_append_is_table");
-  post_block = CreateBlock("array_append_is_table_post");
-
-  cmp = builder_.CreateICmpEQ(value_type, builder_.getInt64(kSluaValueTable));
-  builder_.CreateCondBr(cmp, is_table_block, post_block);
-
-  builder_.SetInsertPoint(is_table_block);
-  TableRefInc(value);
-  builder_.CreateBr(post_block);
-
-  builder_.SetInsertPoint(post_block);
-  BasicBlock* is_string_block = CreateBlock("array_append_is_string");
-  post_block = CreateBlock("array_append_is_string_post");
-
-  cmp = builder_.CreateICmpEQ(value_type, builder_.getInt64(kSluaValueString));
-  builder_.CreateCondBr(cmp, is_string_block, post_block);
-
-  builder_.SetInsertPoint(is_string_block);
-  StringRefInc(value);
-  builder_.CreateBr(post_block);
-
-  builder_.SetInsertPoint(post_block);
 }
 
 Value* IrEmitter::Eval(const Field& field) {
@@ -1350,15 +1197,15 @@ Value* IrEmitter::Addr(const Index& in) {
 }
 
 Value* IrEmitter::PointerToTableArraySize(Value* table_ptr) {
-  return builder_.CreateStructGEP(table_type_, table_ptr, 1);
+  return builder_.CreateStructGEP(table_type_, table_ptr, 0);
 }
 
 Value* IrEmitter::PointerToTableArrayCapacity(Value* table_ptr) {
-  return builder_.CreateStructGEP(table_type_, table_ptr, 2);
+  return builder_.CreateStructGEP(table_type_, table_ptr, 1);
 }
 
 Value* IrEmitter::PointerToTableArray(Value* table_ptr) {
-  return builder_.CreateStructGEP(table_type_, table_ptr, 3);
+  return builder_.CreateStructGEP(table_type_, table_ptr, 2);
 }
 
 void IrEmitter::Emit(const FuncStat& func_stat) {
@@ -1375,35 +1222,6 @@ void IrEmitter::Emit(const RetStat& ret_stat) {
     ret_value = ConstantStruct::get(
         value_type_, {builder_.getInt64(kSluaValueNil), builder_.getInt64(0)});
   }
-
-  Value* ret_type = ExtractType(ret_value);
-  BasicBlock* then_block = CreateBlock("return_is_table_then");
-  BasicBlock* post_block = CreateBlock("return_is_table_post");
-  Value* cmp =
-      builder_.CreateICmpEQ(ret_type, builder_.getInt64(kSluaValueTable));
-  builder_.CreateCondBr(cmp, then_block, post_block);
-
-  builder_.SetInsertPoint(then_block);
-  TableRefInc(ret_value);
-  builder_.CreateBr(post_block);
-
-  builder_.SetInsertPoint(post_block);
-  then_block = CreateBlock("return_is_string_then");
-  post_block = CreateBlock("return_is_string_post");
-  cmp = builder_.CreateICmpEQ(ret_type, builder_.getInt64(kSluaValueString));
-  builder_.CreateCondBr(cmp, then_block, post_block);
-
-  builder_.SetInsertPoint(then_block);
-  StringRefInc(ret_value);
-  builder_.CreateBr(post_block);
-
-  builder_.SetInsertPoint(post_block);
-  SymbolTable* table = symbol_table_.get();
-  while (table->func == curr_func_) {
-    EmitDestroyScope(*table);
-    table = table->next.get();
-  }
-
   builder_.CreateRet(ret_value);
   builder_.SetInsertPoint(CreateBlock("return_dummy"));
 }
@@ -1506,13 +1324,7 @@ void IrEmitter::EmitBreak() {
   if (break_info_.post_block == nullptr || break_info_.scope == nullptr) {
     throw ParserException{"Error: cannot break here"};
   }
-  SymbolTable* scope = symbol_table_.get();
-  while (scope != break_info_.scope) {
-    EmitDestroyScope(*scope);
-    scope = scope->next.get();
-  }
   builder_.CreateBr(break_info_.post_block);
-
   builder_.SetInsertPoint(CreateBlock("break_dummy"));
 }
 
